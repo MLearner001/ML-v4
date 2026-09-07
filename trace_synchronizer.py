@@ -103,6 +103,20 @@ class SinuTrainSynchronizer:
         # 1. Hitung jumlah tick dan rata-rata kecepatan terukur dari trace
         trace_counts = df_trace_valid['mapped_block'].value_counts().to_dict()
 
+        # Cari kolom path velocity (f7/s7) di trace jika ada
+        vel_col = None
+        for col in df_trace_valid.columns:
+            if 'f7\\s7' in col or 'f7/s7' in col or 'f7' in col:
+                vel_col = col
+                break
+
+        # Menghitung rata-rata kecepatan terukur per blok jika kolom kecepatan (f7/s7) tersedia
+        if vel_col:
+            trace_mean_vels_raw = df_trace_valid.groupby('mapped_block')[vel_col].mean().to_dict()
+            trace_mean_vels = {str(k): v for k, v in trace_mean_vels_raw.items()}
+        else:
+            trace_mean_vels = {}
+
         # 2. Identifikasi blok yang tereksekusi langsung vs micro-blocks yang terlewati
         durations = []
         target_feedrates = []
@@ -197,21 +211,30 @@ class SinuTrainSynchronizer:
             total_cluster_dist = sum(cluster_dists)
 
             if total_cluster_dist > 1e-6:
-                # Feedrate harmonik rata-rata dari kluster
-                f_raw = (total_cluster_dist / cluster_dt) * 60.0
+                # Menggunakan kecepatan rata-rata aktual dari trace (jika ada) sebagai target utama (prioritas 1)
+                anchor_key_used = get_sync_key(cluster_indices[-1])
+                trace_vel = trace_mean_vels.get(anchor_key_used, 0)
 
-                # Bagikan waktu secara proporsional berdasarkan jarak masing-masing
                 for k, d in zip(cluster_indices, cluster_dists):
                     cmd_f_limit = df_gcode.iloc[k]['Cmd_F'] if df_gcode.iloc[k]['Cmd_F'] > 0 else 20000.0
-                    f_clamped = min(f_raw, cmd_f_limit, 20000.0)
 
-                    weight = d / total_cluster_dist
-                    t_sub = weight * cluster_dt
+                    if trace_vel > 0:
+                        # Prioritas pengguna: target feedrate sama seperti aktual output SinuTrain
+                        f_clamped = min(trace_vel, 20000.0)
+                    elif df_gcode.iloc[k]['Cmd_F'] > 0:
+                        f_clamped = min(df_gcode.iloc[k]['Cmd_F'], 20000.0)
+                    else:
+                        # Fallback ke harmonik/cmd
+                        f_raw = (total_cluster_dist / cluster_dt) * 60.0
+                        f_clamped = min(f_raw, cmd_f_limit, 20000.0)
 
                     if f_clamped > 0 and d > 1e-4:
+                        # Perhitungan duration_sec diambil dari jarak / feedrate target
                         t_physical = (d / f_clamped) * 60.0
-                        durations.append(max(t_sub, t_physical))
+                        durations.append(t_physical)
                     else:
+                        weight = d / total_cluster_dist
+                        t_sub = weight * cluster_dt
                         durations.append(t_sub)
 
                     target_feedrates.append(f_clamped)
@@ -220,8 +243,13 @@ class SinuTrainSynchronizer:
                 for k in cluster_indices:
                     t_sub = cluster_dt / len(cluster_indices)
                     durations.append(t_sub)
-                    # Jika non-motion block, Target_Feedrate = Cmd_F
-                    target_feedrates.append(df_gcode.iloc[k]['Cmd_F'])
+
+                    anchor_key_used = get_sync_key(k)
+                    trace_vel = trace_mean_vels.get(anchor_key_used, 0)
+                    if trace_vel > 0:
+                        target_feedrates.append(trace_vel)
+                    else:
+                        target_feedrates.append(df_gcode.iloc[k]['Cmd_F'])
 
             i = j  # Lompat ke blok setelah kluster diproses
 
