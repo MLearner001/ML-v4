@@ -118,6 +118,8 @@ class SinuTrainSynchronizer:
                 row_data = df_gcode.iloc[idx]
                 n = str(int(row_data['N_Number'])) if row_data['N_Number'] != -1 else "-1"
                 if row_data.get('Is_Cycle800', 0) == 1:
+                    if n in trace_counts and trace_counts[n] > 0:
+                        return n
                     return f"C800_{n}"
                 return n
 
@@ -126,7 +128,14 @@ class SinuTrainSynchronizer:
 
             j = i + 1
 
-            if ticks > 0:
+            current_row = df_gcode.iloc[i]
+
+            # Opsi A: Jika blok KASUS B (0 tick) tapi memiliki Delta_3D > 1.0,
+            # jangan cari anchor, proses sendiri dengan min dt.
+            if ticks == 0 and current_row['Delta_3D'] > 1.0:
+                cluster_dt = self.dt
+                # Tetap j = i + 1 karena blok ini tidak digabungkan
+            elif ticks > 0:
                 # KASUS A: Blok tereksekusi normal / Toolpath Panjang
                 # Cari sub-blocks yang memiliki N_Number yang sama (misal hasil ekspansi MCALL)
                 # atau blok tanpa N_Number (-1) yang menempel setelahnya.
@@ -140,13 +149,17 @@ class SinuTrainSynchronizer:
                         break
 
                 cluster_dt = ticks * self.dt
-
             else:
                 # KASUS B: Micro-blocks (0 ticks) - SinuTrain melompati blok ini
                 # Lakukan Look-Ahead: Gabungkan blok ini dengan blok-blok berikutnya
                 # hingga menemukan blok "Anchor" yang terekam di trace (>0 ticks).
                 anchor_ticks = 0
                 while j < n_blocks:
+                    row_j = df_gcode.iloc[j]
+                    # Opsi B: jika di tengah pencarian menemukan blok dengan Delta_3D > 1.0, hentikan
+                    if row_j['Delta_3D'] > 1.0:
+                        break
+
                     cluster_indices.append(j)
                     next_sync_key = get_sync_key(j)
                     anchor_ticks = trace_counts.get(next_sync_key, 0)
@@ -171,7 +184,10 @@ class SinuTrainSynchronizer:
 
                 # Total durasi untuk seluruh micro-blocks + anchor adalah ticks dari anchor
                 # Jika sudah di akhir file dan tidak ada anchor, beri minimal 1 interval 4ms
-                cluster_dt = anchor_ticks * self.dt if anchor_ticks > 0 else 1.0 * self.dt
+                cluster_dt = anchor_ticks * self.dt if anchor_ticks > 0 else self.dt
+
+            # Pastikan cluster_dt tidak kurang dari batas bawah self.dt
+            cluster_dt = max(cluster_dt, self.dt)
 
             # --- DISTRIBUSI WAKTU PROPORSIONAL (Distance-Weighted Interpolation) ---
             cluster_dists = [
@@ -182,20 +198,29 @@ class SinuTrainSynchronizer:
 
             if total_cluster_dist > 1e-6:
                 # Feedrate harmonik rata-rata dari kluster
-                f_group = (total_cluster_dist / cluster_dt) * 60.0 if cluster_dt > 0 else df_gcode.iloc[cluster_indices[0]]['Cmd_F']
+                f_raw = (total_cluster_dist / cluster_dt) * 60.0
 
                 # Bagikan waktu secara proporsional berdasarkan jarak masing-masing
                 for k, d in zip(cluster_indices, cluster_dists):
+                    cmd_f_limit = df_gcode.iloc[k]['Cmd_F'] if df_gcode.iloc[k]['Cmd_F'] > 0 else 20000.0
+                    f_clamped = min(f_raw, cmd_f_limit, 20000.0)
+
                     weight = d / total_cluster_dist
                     t_sub = weight * cluster_dt
-                    durations.append(t_sub)
-                    target_feedrates.append(f_group)
+
+                    if f_clamped > 0 and d > 1e-4:
+                        t_physical = (d / f_clamped) * 60.0
+                        durations.append(max(t_sub, t_physical))
+                    else:
+                        durations.append(t_sub)
+
+                    target_feedrates.append(f_clamped)
             else:
                 # Gerakan diam murni (misal logika G54, tool change, dwell)
                 for k in cluster_indices:
                     t_sub = cluster_dt / len(cluster_indices)
                     durations.append(t_sub)
-                    # Fallback ke commanded feedrate jika tidak ada jarak
+                    # Jika non-motion block, Target_Feedrate = Cmd_F
                     target_feedrates.append(df_gcode.iloc[k]['Cmd_F'])
 
             i = j  # Lompat ke blok setelah kluster diproses
