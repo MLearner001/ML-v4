@@ -444,21 +444,27 @@ class NCParser:
 
             radius = math.sqrt(i_val**2 + j_val**2 + k_val**2)
 
-        if radius > 0 and delta_3d > 0:
-            if delta_3d < 1e-4:
-                base_arc = 2 * math.pi * radius
+        if radius > 0:
+            # Hitung jarak garis lurus (chord) HANYA pada bidang datar XY
+            chord_xy = math.sqrt(dx**2 + dy**2)
+
+            if chord_xy < 1e-4:
+                # Jika titik awal dan akhir di XY sama persis (Full Circle)
+                # Jika ada parameter TURN, gunakan turn_val. Jika tidak, asumsikan 1 putaran penuh.
+                circles = turn_val if turn_val > 0 else 1
+                total_arc_xy = circles * 2 * math.pi * radius
             else:
-                ratio = delta_3d / (2.0 * radius)
-                ratio = max(-1.0, min(1.0, ratio))
+                # Hitung busur parsial (Partial Arc)
+                ratio = chord_xy / (2.0 * radius)
+                ratio = max(-1.0, min(1.0, ratio)) # Clip to avoid domain errors
                 theta = 2.0 * math.asin(ratio)
                 base_arc = radius * theta
 
-            # Tambahkan jarak dari total putaran penuh (TURN)
-            delta_3d = base_arc + (turn_val * 2 * math.pi * radius)
+                # Tambahkan total keliling dari parameter TURN
+                total_arc_xy = base_arc + (turn_val * 2 * math.pi * radius)
 
-        elif radius > 0 and delta_3d < 1e-4:
-            # Full circle + extra turns
-            delta_3d = (2 * math.pi * radius) + (turn_val * 2 * math.pi * radius)
+            # Hitung jarak 3D sebenarnya (Sisi Miring dari pergerakan XY dan Z)
+            delta_3d = math.sqrt(total_arc_xy**2 + dz**2)
 
       else:
         sharpness_angle = self._calculate_sharpness_angle(
