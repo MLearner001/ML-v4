@@ -83,15 +83,12 @@ def run_training_pipeline(data_dir: str, out_dir: str, mem_mode: str = "high",
 
         with open(trace_file, 'r', encoding='utf-8', errors='ignore') as f:
             for i, line in enumerate(f):
-                # Cari baris yang kemungkinan merupakan header aktual data time series,
-                # mengandung time atau variasi f1/s1 atau f1\s1
-                if line.startswith('time') or any(k in line for k in ['f1/s1', 'f1\\s1', 'actLineNumber']):
-                    # Pastikan kita tidak menangkap baris meta-data (seperti Signal,key,event...)
-                    if 'Signal' not in line:
-                        header_idx = i
-                        if ';' in line:
-                            detected_sep = ';'
-                        break
+                # Cari baris yang merupakan header aktual data time series (diawali dengan 'time')
+                if line.startswith('time'):
+                    header_idx = i
+                    if ';' in line:
+                        detected_sep = ';'
+                    break
 
         # Membaca trace SinuTrain menggunakan skip-rows dan error_bad_lines/on_bad_lines dinonaktifkan
         try:
