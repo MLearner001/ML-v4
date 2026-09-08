@@ -221,23 +221,30 @@ class SinuTrainSynchronizer:
                 for k, d in zip(cluster_indices, cluster_dists):
                     cmd_f_limit = df_gcode.iloc[k]['Cmd_F'] if df_gcode.iloc[k]['Cmd_F'] > 0 else 20000.0
 
-                    if trace_vel > 0:
+                    # Ambil trace velocity dari blok spesifik (kasus A tunggal) jika punya tick sendiri
+                    specific_key = get_sync_key(k)
+                    specific_trace_vel = trace_mean_vels.get(specific_key, 0)
+                    active_trace_vel = specific_trace_vel if specific_trace_vel > 0 else trace_vel
+
+                    if active_trace_vel > 0:
                         # Prioritas pengguna: target feedrate sama seperti aktual output SinuTrain
-                        f_clamped = min(trace_vel, 20000.0)
+                        f_clamped = min(active_trace_vel, 20000.0)
                     else:
-                        # Fallback ke harmonik/cmd
+                        # Fallback ke harmonik murni ketika tidak ada data trace velocity.
+                        # Instruksi: gunakan feedrate harmonik (f_raw) tanpa membatasinya dengan command feedrate (Cmd_F)
+                        # agar durasi dan feedrate dapat merefleksikan kecepatan fisik/waktu nyata.
                         f_raw = (total_cluster_dist / cluster_dt) * 60.0
-                        f_clamped = min(f_raw, cmd_f_limit, 20000.0)
+                        f_clamped = min(f_raw, 20000.0)
+
+                    weight = d / total_cluster_dist
+                    t_sub = weight * cluster_dt
 
                     if f_clamped > 0 and d > 1e-4:
-                        # Perhitungan duration_sec diambil dari jarak / feedrate target
+                        # Pastikan durasinya dihitung secara realistis sesuai kecepatan fisik yang sudah di-clamp
                         t_physical = (d / f_clamped) * 60.0
-                        durations.append(t_physical)
-                    else:
-                        weight = d / total_cluster_dist
-                        t_sub = weight * cluster_dt
-                        durations.append(t_sub)
+                        t_sub = max(t_sub, t_physical)
 
+                    durations.append(t_sub)
                     target_feedrates.append(f_clamped)
             else:
                 # Gerakan diam murni (misal logika G54, tool change, dwell)
