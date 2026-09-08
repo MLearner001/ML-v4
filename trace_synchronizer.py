@@ -131,9 +131,12 @@ class SinuTrainSynchronizer:
             def get_sync_key(idx):
                 row_data = df_gcode.iloc[idx]
                 n = str(int(row_data['N_Number'])) if row_data['N_Number'] != -1 else "-1"
+
+                # Prioritaskan baris reguler jika ada di trace
+                if n in trace_counts and trace_counts[n] > 0:
+                    return n
+
                 if row_data.get('Is_Cycle800', 0) == 1:
-                    if n in trace_counts and trace_counts[n] > 0:
-                        return n
                     return f"C800_{n}"
                 return n
 
@@ -221,8 +224,6 @@ class SinuTrainSynchronizer:
                     if trace_vel > 0:
                         # Prioritas pengguna: target feedrate sama seperti aktual output SinuTrain
                         f_clamped = min(trace_vel, 20000.0)
-                    elif df_gcode.iloc[k]['Cmd_F'] > 0:
-                        f_clamped = min(df_gcode.iloc[k]['Cmd_F'], 20000.0)
                     else:
                         # Fallback ke harmonik/cmd
                         f_raw = (total_cluster_dist / cluster_dt) * 60.0
