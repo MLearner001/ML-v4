@@ -263,6 +263,9 @@ class NCParser:
       k_match = re.search(r"\bK\s*=\s*AC\(([-\d\.]+)\)|\bK([-\d\.]+)", line)
       cr_match = re.search(r"\bCR\s*=\s*([-\d\.]+)", line)
 
+      turn_match = re.search(r"\bTURN\s*=\s*([-\d]+)", line, re.IGNORECASE)
+      turn_val = abs(int(turn_match.group(1))) if turn_match else 0
+
       def get_target(match, current_val):
           if match:
               val = self._evaluate_r_param(match.group(1) if match.group(1) else match.group(2))
@@ -441,23 +444,27 @@ class NCParser:
 
             radius = math.sqrt(i_val**2 + j_val**2 + k_val**2)
 
-        if radius > 0 and delta_3d > 0:
-            # Full circle edge case (start == end, delta_3d == 0) is handled separately below if needed.
-            # However, typically a full circle has delta_3d = 0, but if it's a full circle, G-code often provides I/J/K without X/Y/Z.
-            # If delta_3d == 0 and radius > 0, it's a full circle: arc_length = 2 * pi * R
-            # Wait, if start == end, delta_3d is 0.
-            if delta_3d < 1e-4:
-                delta_3d = 2 * math.pi * radius
+        if radius > 0:
+            # Hitung jarak garis lurus (chord) HANYA pada bidang datar XY
+            chord_xy = math.sqrt(dx**2 + dy**2)
+
+            if chord_xy < 1e-4:
+                # Jika titik awal dan akhir di XY sama persis (Full Circle)
+                # Jika ada parameter TURN, gunakan turn_val. Jika tidak, asumsikan 1 putaran penuh.
+                circles = turn_val if turn_val > 0 else 1
+                total_arc_xy = circles * 2 * math.pi * radius
             else:
-                # s = R * theta
-                # chord = 2 * R * sin(theta/2) -> theta = 2 * arcsin(chord / (2R))
-                ratio = delta_3d / (2.0 * radius)
+                # Hitung busur parsial (Partial Arc)
+                ratio = chord_xy / (2.0 * radius)
                 ratio = max(-1.0, min(1.0, ratio)) # Clip to avoid domain errors
                 theta = 2.0 * math.asin(ratio)
-                delta_3d = radius * theta
-        elif radius > 0 and delta_3d < 1e-4:
-            # Full circle
-            delta_3d = 2 * math.pi * radius
+                base_arc = radius * theta
+
+                # Tambahkan total keliling dari parameter TURN
+                total_arc_xy = base_arc + (turn_val * 2 * math.pi * radius)
+
+            # Hitung jarak 3D sebenarnya (Sisi Miring dari pergerakan XY dan Z)
+            delta_3d = math.sqrt(total_arc_xy**2 + dz**2)
 
       else:
         sharpness_angle = self._calculate_sharpness_angle(
