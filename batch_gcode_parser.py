@@ -251,9 +251,15 @@ class NCParser:
         self.state.cmd_s = self._evaluate_r_param(s_val_str)
 
       # 5. Ekstraksi Koordinat Target
-      x_match = re.search(r"\bX\s*=\s*([^\s,]+)|\bX([-\d\.]+)", line)
-      y_match = re.search(r"\bY\s*=\s*([^\s,]+)|\bY([-\d\.]+)", line)
-      z_match = re.search(r"\bZ\s*=\s*([^\s,]+)|\bZ([-\d\.]+)", line)
+      # Abaikan koordinat jika ini adalah blok G04 (Dwell), karena X/F/S merepresentasikan waktu, bukan posisi
+      is_dwell_block = bool(re.search(r"\bG0*4\b", line, re.IGNORECASE))
+
+      if not is_dwell_block:
+          x_match = re.search(r"\bX\s*=\s*([^\s,]+)|\bX([-\d\.]+)", line)
+          y_match = re.search(r"\bY\s*=\s*([^\s,]+)|\bY([-\d\.]+)", line)
+          z_match = re.search(r"\bZ\s*=\s*([^\s,]+)|\bZ([-\d\.]+)", line)
+      else:
+          x_match = y_match = z_match = None
       b_match = re.search(r"\bB\s*=\s*([^\s,]+)|\bB([-\d\.]+)", line)
       c_match = re.search(r"\bC\s*=\s*([^\s,]+)|\bC([-\d\.]+)", line)
       a3_match = re.search(r"\bA3\s*=\s*([-\d\.]+)", line)
@@ -488,6 +494,15 @@ class NCParser:
           theo_duration = (delta_rot / 5000.0) * 60.0
       else:
           theo_duration = (delta_3d / safe_f) * 60.0
+
+      # --- TAMBAHAN KHUSUS G04 (DWELL TIME) ---
+      if re.search(r"\bG0*4\b", line, re.IGNORECASE):
+          # Siemens bisa menggunakan F, X, atau S untuk parameter jeda waktu
+          dwell_match = re.search(r"\b[FXS]\s*=\s*([^\s,]+)|\b[FXS]([0-9\.]+)", line, re.IGNORECASE)
+          if dwell_match:
+              dwell_val_str = dwell_match.group(1) if dwell_match.group(1) else dwell_match.group(2)
+              theo_duration = self._evaluate_r_param(dwell_val_str)
+      # ----------------------------------------
 
       parsed_rows.append({
           "Block_ID": str(block_id),
