@@ -47,10 +47,22 @@ def predict_nc_file(mpf_filepath: str,
     effective_distance = np.where(df_parsed['Delta_3D'] > 1e-4,
                                   df_parsed['Delta_3D'],
                                   df_parsed['Delta_Rot'])
+    # Dapatkan jarak efektif (hindari div-by-zero)
+    effective_distance = np.maximum(effective_distance, 1e-6)
 
-    # Jika blok non-motion (Delta=0), beri durasi 0 agar aman
+    # Ambil Theo_Duration dari parser
+    theo_durations = df_parsed['Theo_Duration'].values
+    is_motion = df_parsed['Is_Motion_Block'].values
+
+    # Waktu eksekusi:
+    # - Jika Motion Block (1): Gunakan Jarak / Prediksi Kecepatan Aktual dari AI
+    # - Jika Non-Motion (0): Gunakan durasi mutlak dari parser (contoh: Dwell Time G04)
     df_parsed['Predicted_Feedrate_mm_min'] = predicted_feedrate
-    block_durations_sec = np.where(df_parsed['Is_Motion_Block'] == 1, (effective_distance / predicted_feedrate) * 60.0, 0.0)
+    block_durations_sec = np.where(
+        is_motion == 1,
+        (effective_distance / predicted_feedrate) * 60.0,
+        theo_durations  # Mengambil nilai absolut dwell time / delay
+    )
     df_parsed['Estimated_Duration_Sec'] = block_durations_sec
 
     total_time_sec = float(np.sum(block_durations_sec))
