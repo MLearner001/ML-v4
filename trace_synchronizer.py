@@ -237,6 +237,16 @@ class SinuTrainSynchronizer:
                             f_raw = (total_cluster_dist / cluster_dt) * 60.0
                             f_clamped = min(f_raw, 20000.0)
 
+                    # --- SAFEGUARD: PHANTOM MOVEMENT (ILUSI KOORDINAT) ---
+                    # Jika kecepatan trace nyaris nol (mesin diam) TAPI parser melihat
+                    # jarak d yang besar, ini adalah pergeseran origin (misal paska CYCLE800).
+                    # Paksa f_clamped menjadi Pseudo-Feedrate (hingga batas 20000)
+                    # agar saat inference (t = d / f), waktu yang dihasilkan menjadi sangat kecil/aman.
+                    if f_clamped <= 1.0 and d > 1.0:
+                        f_pseudo = (d / max(cluster_dt, 0.004)) * 60.0
+                        f_clamped = min(f_pseudo, 20000.0)
+                    # -----------------------------------------------------
+
                     weight = d / total_cluster_dist
                     t_sub = weight * cluster_dt
 

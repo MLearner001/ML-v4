@@ -153,11 +153,14 @@ class NCParser:
           else:
              dp_val = 0.0
 
+          dtb = args[5] if args[5] is not None else 0.0
+
           self.state.mcall_params = {
               "rtp": rtp,
               "rfp": rfp,
               "sdis": sdis,
               "dp": dp_val,
+              "dtb": dtb,
           }
           self.state.is_mcall_active = True
       else:
@@ -292,40 +295,23 @@ class NCParser:
         dp = self.state.mcall_params["dp"]
         z_approach = rfp + sdis
 
-        # 4 Sub-Gerakan Pengeboran
+        # Ambil dtb dari state
+        dtb = self.state.mcall_params.get("dtb", 0.0)
+
+        # Tambahkan parameter explicit_time di akhir tuple
         sub_movements = [
-            # 1. Gerak Rapid XY di Return Plane
-            (
-                tgt_x,
-                tgt_y,
-                rtp,
-                "G00",
-                self.state.cmd_f,
-                f"{block_id}_pos",
-            ),
-            # 2. Gerak Rapid Turun Z ke Approach Plane
-            (
-                tgt_x,
-                tgt_y,
-                z_approach,
-                "G00",
-                self.state.cmd_f,
-                f"{block_id}_app",
-            ),
-            # 3. Gerak Pemakanan Bor Z ke Kedalaman Akhir DP
-            (tgt_x, tgt_y, dp, "G01", self.state.cmd_f, f"{block_id}_cut"),
-            # 4. Gerak Retract Cepat Naik Z kembali ke RTP
-            (
-                tgt_x,
-                tgt_y,
-                rtp,
-                "G00",
-                self.state.cmd_f,
-                f"{block_id}_ret",
-            ),
+            (tgt_x, tgt_y, rtp, "G00", self.state.cmd_f, f"{block_id}_pos", 0.0),
+            (tgt_x, tgt_y, z_approach, "G00", self.state.cmd_f, f"{block_id}_app", 0.0),
+            (tgt_x, tgt_y, dp, "G01", self.state.cmd_f, f"{block_id}_cut", 0.0),
         ]
 
-        for sub_x, sub_y, sub_z, mode, f_val, sub_id in sub_movements:
+        # Selipkan fase dwell jika dtb > 0 (menggunakan G04 agar dimengerti sebagai jeda)
+        if dtb > 0:
+            sub_movements.append((tgt_x, tgt_y, dp, "G04", 0.0, f"{block_id}_dwell", dtb))
+
+        sub_movements.append((tgt_x, tgt_y, rtp, "G00", self.state.cmd_f, f"{block_id}_ret", 0.0))
+
+        for sub_x, sub_y, sub_z, mode, f_val, sub_id, explicit_time in sub_movements:
           dx = sub_x - self.state.x
           dy = sub_y - self.state.y
           dz = sub_z - self.state.z
@@ -344,7 +330,10 @@ class NCParser:
           # [Fase 2 Update] Theoretical Duration (Seconds)
           # Asumsi minimal velocity 1.0 mm/min untuk menghindari div by zero
           safe_f = max(1.0, effective_f)
-          theo_duration = (delta_3d / safe_f) * 60.0
+          if mode == "G04":
+              theo_duration = explicit_time
+          else:
+              theo_duration = (delta_3d / safe_f) * 60.0
 
           parsed_rows.append({
               "Block_ID": sub_id,
