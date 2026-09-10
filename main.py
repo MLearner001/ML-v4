@@ -115,7 +115,7 @@ def run_training_pipeline(data_dir: str, out_dir: str, mem_mode: str = "high",
         sys.exit(1)
 
     print(f"\n{'='*50}\n[TAHAP 3] Scaling, Padding & Sequence Windowing (Batch)\n{'='*50}")
-    preprocessor = DatasetPreprocessor(window_size=201)
+    preprocessor = DatasetPreprocessor(window_size=101)
 
     is_resume_scaler = False
     if resume_scaler and os.path.exists(resume_scaler):
