@@ -27,8 +27,8 @@ def predict_nc_file(mpf_filepath: str,
     parser = NCParser()
     df_parsed = parser.parse_file(mpf_filepath)
 
-    print(f"[INFO] 2. Memuat Scaler & Menyiapkan Tensor Jendela W=201...")
-    preprocessor = DatasetPreprocessor(window_size=201)
+    print(f"[INFO] 2. Memuat Scaler & Menyiapkan Tensor Jendela W=101...")
+    preprocessor = DatasetPreprocessor(window_size=101)
     preprocessor.load_scalers(scaler_path)
 
     # Gunakan SlidingWindowGenerator (mem-mode low) agar WSL/RAM tidak OOM terbunuh paksa pada file gcode besar

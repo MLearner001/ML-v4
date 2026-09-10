@@ -11,9 +11,9 @@ from sklearn.preprocessing import StandardScaler
 from typing import Tuple, List, Dict
 
 class DatasetPreprocessor:
-    def __init__(self, window_size: int = 201):
+    def __init__(self, window_size: int = 101):
         self.window_size = window_size
-        self.half_w = (window_size - 1) // 2  # 100 blocks
+        self.half_w = (window_size - 1) // 2  # 50 blocks
 
         # Inisialisasi Scaler
         self.feature_scaler = StandardScaler()
@@ -171,7 +171,10 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
 
         self.total_samples = 0
 
-        for df in df_list:
+        # Mapping index global ke lokasi lokal untuk fallback mode stateless (inferensi)
+        self.file_indices = []
+
+        for file_idx, df in enumerate(df_list):
             df_prep = preprocessor._apply_log_transforms(df, is_training=self.is_training)
             padded_feat, scaled_y = preprocessor.get_padded_features(df_prep)
             self.X_padded_list.append(padded_feat)
@@ -182,14 +185,21 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
             self.file_lengths.append(num_rows)
             self.total_samples += num_rows
 
+            for r in range(num_rows):
+                self.file_indices.append((file_idx, r))
+
         self.num_files = len(df_list)
         self.batches_per_epoch = int(np.ceil(self.total_samples / float(self.batch_size)))
 
-        self.on_epoch_end()
+        if self.is_training:
+            self.on_epoch_end()
 
     def on_epoch_end(self):
-        """Reset pointer pembacaan setiap awal epoch."""
-        self.file_order = np.random.permutation(self.num_files) if self.is_training else np.arange(self.num_files)
+        """Reset pointer pembacaan setiap awal epoch (hanya berlaku jika training)."""
+        if not self.is_training:
+            return
+
+        self.file_order = np.random.permutation(self.num_files)
         self.active_files = [] # List of tuples: [file_idx, current_row]
         self.next_file_idx = 0
 
@@ -198,9 +208,6 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
 
         self.buffer_x = []
         self.buffer_y = []
-
-        # Disable shuffle at Keras level by returning the same batches_per_epoch but ignoring the index
-        # We will maintain our own stateful buffer.
 
     def _replenish_active_files(self):
         """Menambah file aktif hingga mencapai batas parallel_files"""
@@ -243,11 +250,24 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
         return self.batches_per_epoch
 
     def __getitem__(self, idx):
-        """
-        Keras akan memanggil indeks. Namun karena generator ini Stateful Interleaved Buffer,
-        kita selalu mengambil dari buffer secara sekuensial, mengabaikan 'idx' acak Keras.
-        Ini aman asalkan `use_multiprocessing=False` dan pekerja thread tunggal.
-        """
+        if not self.is_training:
+            # Mode Stateless murni untuk inferensi agar validasi dimensi atau `predict` Keras
+            # tidak merusak urutan antrean stateful buffer (mencegah shape mismatch error).
+            start_idx = idx * self.batch_size
+            end_idx = min((idx + 1) * self.batch_size, self.total_samples)
+
+            batch_x = []
+            batch_y = []
+
+            for i in range(start_idx, end_idx):
+                file_idx, row_idx = self.file_indices[i]
+                padded_arr = self.X_padded_list[file_idx]
+                window = padded_arr[row_idx : row_idx + self.window_size]
+                batch_x.append(window)
+
+            return np.array(batch_x, dtype=np.float32)
+
+        # Mode Stateful Interleaved Buffer (Training)
         if len(self.buffer_x) < self.batch_size and (len(self.active_files) > 0 or self.next_file_idx < self.num_files):
             self._fill_buffer()
 
@@ -255,18 +275,13 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
         take_count = min(self.batch_size, len(self.buffer_x))
         if take_count == 0:
             # Fallback jika kehabisan data di akhir epoch
-            return (np.zeros((1, self.window_size, len(self.preprocessor.feature_cols))), np.zeros((1, 1))) if self.is_training else np.zeros((1, self.window_size, len(self.preprocessor.feature_cols)))
+            return (np.zeros((1, self.window_size, len(self.preprocessor.feature_cols))), np.zeros((1, 1)))
 
         batch_x = np.array(self.buffer_x[:take_count], dtype=np.float32)
-        if self.is_training:
-            batch_y = np.array(self.buffer_y[:take_count], dtype=np.float32)
+        batch_y = np.array(self.buffer_y[:take_count], dtype=np.float32)
 
         # Hapus item yang sudah diambil dari buffer
         self.buffer_x = self.buffer_x[take_count:]
-        if self.is_training:
-            self.buffer_y = self.buffer_y[take_count:]
+        self.buffer_y = self.buffer_y[take_count:]
 
-        if self.is_training:
-            return batch_x, batch_y
-        else:
-            return batch_x
+        return batch_x, batch_y

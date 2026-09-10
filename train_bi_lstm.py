@@ -16,7 +16,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 
     # Layer 1: Bidirectional LSTM
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=True, name="forward_BiLSTM_L1"))(inputs)
-    x = layers.SpatialDropout1D(0.1)(x)  # Diturunkan dari 0.4
+    x = layers.SpatialDropout1D(0.2)(x)  # Diturunkan dari 0.4
 
     # Layer 2: Bidirectional LSTM
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=False, name="forward_BiLSTM_L2"))(x)
@@ -24,7 +24,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 
     # Dense Regressor Head (Kapasitas diperbesar, Dropout dikurangi)
     x = layers.Dense(128, activation="relu")(x)
-    x = layers.Dropout(0.1)(x)
+    x = layers.Dropout(0.2)(x)
     x = layers.Dense(64, activation="relu")(x)
     # Hapus dropout kedua agar presisi regresi tidak rusak
     outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output")(x)
