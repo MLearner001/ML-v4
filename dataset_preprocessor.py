@@ -148,22 +148,30 @@ class DatasetPreprocessor:
             self.feature_cols = data["feature_cols"]
 
 class SlidingWindowGenerator(tf.keras.utils.Sequence):
-    """Generator Data Keras untuk menghemat RAM secara drastis dengan membuat jendela 3D on-the-fly."""
-    def __init__(self, df_list: List[pd.DataFrame], preprocessor: DatasetPreprocessor, batch_size: int = 128, is_training: bool = True, **kwargs):
-        super().__init__(**kwargs)  # Mencegah peringatan PyDataset Adapter di Keras 3
+    """
+    Generator Data Keras dengan mekanisme Interleaved Memory Buffer.
+    Mencegah OOM dengan tidak menaruh array 3D di memori sekaligus,
+    dan mengatasi Correlated Batches dengan membaca beberapa file secara paralel
+    ke dalam buffer lalu diacak sebelum disuplai ke GPU.
+    """
+    def __init__(self, df_list: List[pd.DataFrame], preprocessor: DatasetPreprocessor, batch_size: int = 128, is_training: bool = True, max_buffer_size: int = 5000, parallel_files: int = 4, **kwargs):
+        super().__init__(**kwargs)
         self.batch_size = batch_size
         self.preprocessor = preprocessor
         self.window_size = preprocessor.window_size
         self.is_training = is_training
 
-        # Pre-compute padded 2D features untuk seluruh dataset agar tidak terlalu lambat
+        self.max_buffer_size = max_buffer_size
+        self.parallel_files = parallel_files
+
+        # Pre-compute padded 2D features untuk mempercepat ekstraksi window
         self.X_padded_list = []
         self.Y_list = []
+        self.file_lengths = []
 
         self.total_samples = 0
-        self.file_indices = [] # Menyimpan tuple (file_idx, row_idx) untuk setiap global sample_idx
 
-        for file_idx, df in enumerate(df_list):
+        for df in df_list:
             df_prep = preprocessor._apply_log_transforms(df, is_training=self.is_training)
             padded_feat, scaled_y = preprocessor.get_padded_features(df_prep)
             self.X_padded_list.append(padded_feat)
@@ -171,32 +179,94 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
                 self.Y_list.append(scaled_y)
 
             num_rows = len(df)
+            self.file_lengths.append(num_rows)
             self.total_samples += num_rows
 
-            # Map index global ke lokasi lokal (file dan baris)
-            for r in range(num_rows):
-                self.file_indices.append((file_idx, r))
+        self.num_files = len(df_list)
+        self.batches_per_epoch = int(np.ceil(self.total_samples / float(self.batch_size)))
+
+        self.on_epoch_end()
+
+    def on_epoch_end(self):
+        """Reset pointer pembacaan setiap awal epoch."""
+        self.file_order = np.random.permutation(self.num_files) if self.is_training else np.arange(self.num_files)
+        self.active_files = [] # List of tuples: [file_idx, current_row]
+        self.next_file_idx = 0
+
+        # Load initial active files
+        self._replenish_active_files()
+
+        self.buffer_x = []
+        self.buffer_y = []
+
+        # Disable shuffle at Keras level by returning the same batches_per_epoch but ignoring the index
+        # We will maintain our own stateful buffer.
+
+    def _replenish_active_files(self):
+        """Menambah file aktif hingga mencapai batas parallel_files"""
+        while len(self.active_files) < self.parallel_files and self.next_file_idx < self.num_files:
+            f_idx = self.file_order[self.next_file_idx]
+            self.active_files.append([f_idx, 0]) # [file_index, current_row_pointer]
+            self.next_file_idx += 1
+
+    def _fill_buffer(self):
+        """Membaca window secara sekuensial (bergiliran/interleaved) dari file-file aktif hingga buffer penuh."""
+        while len(self.buffer_x) < self.max_buffer_size and len(self.active_files) > 0:
+            for active_f in self.active_files.copy():
+                f_idx, r_idx = active_f
+
+                # Baca 1 window
+                window = self.X_padded_list[f_idx][r_idx : r_idx + self.window_size]
+                self.buffer_x.append(window)
+                if self.is_training:
+                    self.buffer_y.append(self.Y_list[f_idx][r_idx])
+
+                # Majukan pointer
+                active_f[1] += 1
+
+                # Jika file sudah habis terbaca
+                if active_f[1] >= self.file_lengths[f_idx]:
+                    self.active_files.remove(active_f)
+                    self._replenish_active_files()
+
+                if len(self.buffer_x) >= self.max_buffer_size:
+                    break
+
+        # Shuffle murni di dalam RAM (Buffer) jika sedang training
+        if self.is_training and len(self.buffer_x) > 0:
+            indices = np.arange(len(self.buffer_x))
+            np.random.shuffle(indices)
+            self.buffer_x = [self.buffer_x[i] for i in indices]
+            self.buffer_y = [self.buffer_y[i] for i in indices]
 
     def __len__(self):
-        return int(np.ceil(self.total_samples / float(self.batch_size)))
+        return self.batches_per_epoch
 
     def __getitem__(self, idx):
-        start_idx = idx * self.batch_size
-        end_idx = min((idx + 1) * self.batch_size, self.total_samples)
+        """
+        Keras akan memanggil indeks. Namun karena generator ini Stateful Interleaved Buffer,
+        kita selalu mengambil dari buffer secara sekuensial, mengabaikan 'idx' acak Keras.
+        Ini aman asalkan `use_multiprocessing=False` dan pekerja thread tunggal.
+        """
+        if len(self.buffer_x) < self.batch_size and (len(self.active_files) > 0 or self.next_file_idx < self.num_files):
+            self._fill_buffer()
 
-        batch_x = []
-        batch_y = []
+        # Ambil batch_size item dari buffer
+        take_count = min(self.batch_size, len(self.buffer_x))
+        if take_count == 0:
+            # Fallback jika kehabisan data di akhir epoch
+            return (np.zeros((1, self.window_size, len(self.preprocessor.feature_cols))), np.zeros((1, 1))) if self.is_training else np.zeros((1, self.window_size, len(self.preprocessor.feature_cols)))
 
-        for i in range(start_idx, end_idx):
-            file_idx, row_idx = self.file_indices[i]
-            padded_arr = self.X_padded_list[file_idx]
+        batch_x = np.array(self.buffer_x[:take_count], dtype=np.float32)
+        if self.is_training:
+            batch_y = np.array(self.buffer_y[:take_count], dtype=np.float32)
 
-            window = padded_arr[row_idx : row_idx + self.window_size]
-            batch_x.append(window)
-            if self.is_training:
-                batch_y.append(self.Y_list[file_idx][row_idx])
+        # Hapus item yang sudah diambil dari buffer
+        self.buffer_x = self.buffer_x[take_count:]
+        if self.is_training:
+            self.buffer_y = self.buffer_y[take_count:]
 
         if self.is_training:
-            return np.array(batch_x, dtype=np.float32), np.array(batch_y, dtype=np.float32)
+            return batch_x, batch_y
         else:
-            return np.array(batch_x, dtype=np.float32)
+            return batch_x
