@@ -40,7 +40,15 @@ def predict_nc_file(mpf_filepath: str,
 
     # 4. Inverse Transform untuk Mendapatkan Waktu Aktual (Detik)
     y_pred_log = preprocessor.target_scaler.inverse_transform(y_pred_scaled)
-    predicted_feedrate = np.maximum(1.0, np.expm1(y_pred_log).flatten())
+    raw_predicted_feedrate = np.maximum(1.0, np.expm1(y_pred_log).flatten())
+
+    # --- SAFEGUARD: PHYSICS-INFORMED CLIPPING ---
+    # Ambil batas kecepatan komando (G01 F... atau limit G00) dari parser
+    cmd_f_limits = df_parsed['Cmd_F'].values
+
+    # Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
+    predicted_feedrate = np.minimum(raw_predicted_feedrate, cmd_f_limits)
+    # --------------------------------------------
 
     # 5. Integrasi Kinematika Fisik & Pengecekan Validitas
     # Gunakan Delta_3D untuk pergerakan linier atau Delta_Rot untuk pergerakan putar
