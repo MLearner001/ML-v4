@@ -11,9 +11,9 @@ from sklearn.preprocessing import StandardScaler
 from typing import Tuple, List, Dict
 
 class DatasetPreprocessor:
-    def __init__(self, window_size: int = 201):
+    def __init__(self, window_size: int = 101):
         self.window_size = window_size
-        self.half_w = (window_size - 1) // 2  # 100 blocks
+        self.half_w = (window_size - 1) // 2  # 50 blocks
 
         # Inisialisasi Scaler
         self.feature_scaler = StandardScaler()
