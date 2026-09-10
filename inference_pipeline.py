@@ -46,8 +46,12 @@ def predict_nc_file(mpf_filepath: str,
     # Ambil batas kecepatan komando (G01 F... atau limit G00) dari parser
     cmd_f_limits = df_parsed['Cmd_F'].values
 
-    # Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
+    # 1. Batas Atas: Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
     predicted_feedrate = np.minimum(raw_predicted_feedrate, cmd_f_limits)
+
+    # 2. Batas Bawah: Tebakan AI minimal 10% dari commanded feedrate (mencegah anomali waktu meledak)
+    min_feedrate_limits = 0.10 * cmd_f_limits
+    predicted_feedrate = np.maximum(predicted_feedrate, min_feedrate_limits)
     # --------------------------------------------
 
     # 5. Integrasi Kinematika Fisik & Pengecekan Validitas
