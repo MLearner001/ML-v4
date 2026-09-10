@@ -14,27 +14,26 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     """Membangun arsitektur Dual-Layer Bi-LSTM."""
     inputs = layers.Input(shape=input_shape, name="NC_Sequence_Input")
 
-    # Layer 1: Bidirectional LSTM dengan Feature Dropout
-    # Fase 2: Kita menggunakan kapasitas sel yang dapat diubah dan memperkuat dropouts.
+    # Layer 1: Bidirectional LSTM
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=True, name="forward_BiLSTM_L1"))(inputs)
-    x = layers.SpatialDropout1D(0.4)(x)
+    x = layers.SpatialDropout1D(0.1)(x)  # Diturunkan dari 0.4
 
-    # Layer 2: Bidirectional LSTM memadat ke konteks target tengah
+    # Layer 2: Bidirectional LSTM
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=False, name="forward_BiLSTM_L2"))(x)
     x = layers.BatchNormalization()(x)
 
-    # Dense Regressor Head
+    # Dense Regressor Head (Kapasitas diperbesar, Dropout dikurangi)
+    x = layers.Dense(128, activation="relu")(x)
+    x = layers.Dropout(0.1)(x)
     x = layers.Dense(64, activation="relu")(x)
-    x = layers.Dropout(0.3)(x)
-    x = layers.Dense(32, activation="relu")(x)
-    x = layers.Dropout(0.2)(x)
+    # Hapus dropout kedua agar presisi regresi tidak rusak
     outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output")(x)
 
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM")
 
     # Optimizer AdamW
-    # Memperbesar weight decay untuk membantu regularisasi melawan overfitting memori panjang
-    optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-3)
+    # Longgarkan weight decay agar bobot model memiliki ruang untuk berkembang
+    optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4)
 
     # Fase 2: Gunakan Huber Loss.
     # Karena target variabel (Target_Feedrate) sudah di log1p + StandardScaler di preprocessor (bisa bernilai negatif),
