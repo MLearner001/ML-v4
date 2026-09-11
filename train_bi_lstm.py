@@ -11,33 +11,40 @@ from typing import Tuple
 import tensorflow.keras.backend as K
 
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 128) -> tf.keras.Model:
-    """Membangun arsitektur Dual-Layer Bi-LSTM."""
+    """Membangun arsitektur Dual-Layer Bi-LSTM dengan Center-Block Bypass."""
     inputs = layers.Input(shape=input_shape, name="NC_Sequence_Input")
 
-    # Layer 1: Bidirectional LSTM
+    # 1. Jalur Utama (LSTM Navigator)
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=True, name="forward_BiLSTM_L1"))(inputs)
-    x = layers.SpatialDropout1D(0.2)(x)  # Diturunkan dari 0.4
+    x = layers.SpatialDropout1D(0.2)(x)
 
-    # Layer 2: Bidirectional LSTM
-    x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=False, name="forward_BiLSTM_L2"))(x)
-    x = layers.BatchNormalization()(x)
+    # Layer 2 diubah ke return_sequences=True
+    x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=True, name="forward_BiLSTM_L2"))(x)
 
-    # Dense Regressor Head (Kapasitas diperbesar, Dropout dikurangi)
-    x = layers.Dense(128, activation="relu")(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.Dense(64, activation="relu")(x)
-    # Hapus dropout kedua agar presisi regresi tidak rusak
-    outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output")(x)
+    # Menggunakan LayerNormalization untuk stabilitas data sekuensial
+    x = layers.LayerNormalization(name="Sequence_Layer_Norm")(x)
 
-    model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM")
+    # Mengekstrak sinyal fitur terkuat dari 101 blok waktu
+    pooled_x = layers.GlobalMaxPooling1D(name="Global_Max_Pooling")(x)
+
+    # 2. Jalur Pintas (Center-Block Bypass)
+    # Mengambil indeks ke-50 (tengah) dari input berukuran 101
+    center_block = layers.Lambda(lambda tensor: tensor[:, 50, :], name="Center_Block_Features")(inputs)
+
+    # 3. Penggabungan (Concatenate)
+    merged = layers.Concatenate(name="LSTM_and_Bypass_Concat")([pooled_x, center_block])
+
+    # 4. Dense Regressor Head (Si Kalkulator)
+    d = layers.Dense(128, activation="relu")(merged)
+    d = layers.Dropout(0.2)(d)
+    d = layers.Dense(64, activation="relu")(d)
+    outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output")(d)
+
+    model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_V2")
 
     # Optimizer AdamW
-    # Longgarkan weight decay agar bobot model memiliki ruang untuk berkembang
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4)
 
-    # Fase 2: Gunakan Huber Loss.
-    # Karena target variabel (Target_Feedrate) sudah di log1p + StandardScaler di preprocessor (bisa bernilai negatif),
-    # kita tidak boleh menggunakan MSLE karena MSLE akan memaksa semua nilai negatif menjadi 0, menghancurkan ground-truth.
     model.compile(optimizer=optimizer, loss=tf.keras.losses.Huber(delta=1.0), metrics=["mae", "mse"])
 
     return model
