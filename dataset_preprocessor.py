@@ -22,14 +22,30 @@ class DatasetPreprocessor:
         self.feature_cols = [
             'Cmd_F', 'Cmd_S', 'Is_G01', 'Is_G02', 'Is_G03', 'Is_Traori',
             'Is_Cycle800', 'Is_MCALL_Sub', 'C832_Tol', 'C832_Mode',
-            'Delta_3D', 'Delta_Rot', 'Tool_Vector_Delta', 'Kinematic_Blend_Ratio', 'Sharpness_Angle',
+            'Delta_3D', 'Delta_Rot', 'Tool_Vector_Delta', 'Kinematic_Blend_Ratio', 'Rotary_Velocity_Demand', 'Sharpness_Angle',
             'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Theo_Duration'
         ]
 
     def _apply_log_transforms(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         df_out = df.copy()
+
+        # --- PERBAIKAN BUG 1: SUMBU PUTAR TRAORI (VEKTOR) ---
+        # Jika rotasi pakai A3/B3/C3, Delta_Rot = 0 tetapi Tool_Vector_Delta > 0.
+        # Konversi delta vektor ke ekuivalen derajat.
+        mask_vector = (df_out['Delta_Rot'] == 0) & (df_out['Tool_Vector_Delta'] > 0)
+        df_out.loc[mask_vector, 'Delta_Rot'] = np.degrees(df_out.loc[mask_vector, 'Tool_Vector_Delta'])
+
+        # Hitung ulang rasio kinematika
+        df_out.loc[mask_vector, 'Kinematic_Blend_Ratio'] = df_out.loc[mask_vector, 'Delta_Rot'] / np.maximum(df_out.loc[mask_vector, 'Delta_3D'], 1e-5)
+        # ----------------------------------------------------
+
+        # Hitung fitur baru: Rotary Velocity Demand (Simulasi Batas Jerk 5-Axis)
+        if 'Rotary_Velocity_Demand' not in df_out.columns:
+            df_out['Rotary_Velocity_Demand'] = df_out['Kinematic_Blend_Ratio'] * df_out['Cmd_F']
+
         # Kompresi logaritmik untuk meredam rentang ekstrem
         df_out['Delta_3D'] = np.log1p(np.maximum(0.0, df_out['Delta_3D'].values))
+        df_out['Rotary_Velocity_Demand'] = np.log1p(np.maximum(0.0, df_out['Rotary_Velocity_Demand'].values))
         df_out['Cmd_F'] = np.log1p(np.maximum(0.0, df_out['Cmd_F'].values))
         df_out['Sharpness_Angle'] = df_out['Sharpness_Angle'].values / np.pi
 
@@ -89,6 +105,8 @@ class DatasetPreprocessor:
             standstill_df['Delta_Rot'] = 0.0
         if 'Kinematic_Blend_Ratio' in standstill_df.columns:
             standstill_df['Kinematic_Blend_Ratio'] = 0.0
+        if 'Rotary_Velocity_Demand' in standstill_df.columns:
+            standstill_df['Rotary_Velocity_Demand'] = 0.0
         if 'Theo_Duration' in standstill_df.columns:
             # Durasi diam = 0
             standstill_df['Theo_Duration'] = 0.0

@@ -35,7 +35,7 @@ def predict_nc_file(mpf_filepath: str,
     infer_generator = SlidingWindowGenerator([df_parsed], preprocessor, batch_size=256, is_training=False)
 
     print(f"[INFO] 3. Memuat Model Bi-LSTM & Menjalankan Inferensi...")
-    model = tf.keras.models.load_model(model_path, compile=False)
+    model = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
     y_pred_scaled = model.predict(infer_generator, verbose=1)
 
     # 4. Inverse Transform untuk Mendapatkan Waktu Aktual (Detik)
@@ -49,8 +49,8 @@ def predict_nc_file(mpf_filepath: str,
     # 1. Batas Atas: Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
     predicted_feedrate = np.minimum(raw_predicted_feedrate, cmd_f_limits)
 
-    # 2. Batas Bawah: Tebakan AI minimal 10% dari commanded feedrate (mencegah anomali waktu meledak)
-    min_feedrate_limits = 0.10 * cmd_f_limits
+    # 2. Batas Bawah: Tebakan AI minimal 0.5% dari commanded feedrate atau minimal absolut 1.0 (mencegah anomali waktu meledak, namun membiarkan pengereman tajam 5-Axis)
+    min_feedrate_limits = np.maximum(0.005 * cmd_f_limits, 1.0)
     predicted_feedrate = np.maximum(predicted_feedrate, min_feedrate_limits)
     # --------------------------------------------
 
