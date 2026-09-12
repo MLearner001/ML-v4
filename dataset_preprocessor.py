@@ -29,20 +29,6 @@ class DatasetPreprocessor:
     def _apply_log_transforms(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         df_out = df.copy()
 
-        # --- PERBAIKAN BUG 1: SUMBU PUTAR TRAORI (VEKTOR) ---
-        # Jika rotasi pakai A3/B3/C3, Delta_Rot = 0 tetapi Tool_Vector_Delta > 0.
-        # Konversi delta vektor ke ekuivalen derajat.
-        mask_vector = (df_out['Delta_Rot'] == 0) & (df_out['Tool_Vector_Delta'] > 0)
-        df_out.loc[mask_vector, 'Delta_Rot'] = np.degrees(df_out.loc[mask_vector, 'Tool_Vector_Delta'])
-
-        # Hitung ulang rasio kinematika
-        df_out.loc[mask_vector, 'Kinematic_Blend_Ratio'] = df_out.loc[mask_vector, 'Delta_Rot'] / np.maximum(df_out.loc[mask_vector, 'Delta_3D'], 1e-5)
-        # ----------------------------------------------------
-
-        # Hitung fitur baru: Rotary Velocity Demand (Simulasi Batas Jerk 5-Axis)
-        if 'Rotary_Velocity_Demand' not in df_out.columns:
-            df_out['Rotary_Velocity_Demand'] = df_out['Kinematic_Blend_Ratio'] * df_out['Cmd_F']
-
         # Kompresi logaritmik untuk meredam rentang ekstrem
         df_out['Delta_3D'] = np.log1p(np.maximum(0.0, df_out['Delta_3D'].values))
         df_out['Rotary_Velocity_Demand'] = np.log1p(np.maximum(0.0, df_out['Rotary_Velocity_Demand'].values))
