@@ -371,6 +371,7 @@ class NCParser:
               "Delta_Rot": 0.0,
               "Tool_Vector_Delta": 0.0,
               "Kinematic_Blend_Ratio": blend_ratio,
+              "Rotary_Velocity_Demand": 0.0,
               "Sharpness_Angle": angle,
               "Is_Motion_Block": 1 if delta_3d > 1e-4 else 0,
               "Is_Reversal_X": (
@@ -411,6 +412,11 @@ class NCParser:
       delta_3d = math.sqrt(dx**2 + dy**2 + dz**2)
       delta_rot = math.sqrt(db**2 + dc**2)
       tool_vec_delta = math.sqrt(da3**2 + db3**2 + dc3**2)
+
+      # --- PATCH 5-AXIS PERMANEN ---
+      # Konversi vektor menjadi derajat jika rotasi eksplisit 0
+      if delta_rot < 1e-6 and tool_vec_delta > 1e-6:
+          delta_rot = math.degrees(tool_vec_delta)
 
       # Circular motions (G02/G03) are smooth arcs, not sharp lines.
       if self.state.motion_mode in ["G02", "G03"]:
@@ -485,7 +491,10 @@ class NCParser:
       effective_limit_f = self.MAX_RAPID if self.state.motion_mode == "G00" else self.state.cmd_f
 
       # [Fase 2] Kinematic Blend Ratio
-      blend_ratio = delta_rot / (delta_3d + 1e-6)
+      blend_ratio = delta_rot / (delta_3d + 1e-5)
+
+      # [Fase 2] Rotary Velocity Demand (Limit Jerk)
+      rotary_demand = blend_ratio * effective_limit_f
 
       # [Fase 2 Update] Theoretical Duration (Seconds)
       safe_f = max(1.0, effective_limit_f)
@@ -534,6 +543,7 @@ class NCParser:
           "Delta_Rot": delta_rot,
           "Tool_Vector_Delta": tool_vec_delta,
           "Kinematic_Blend_Ratio": blend_ratio,
+          "Rotary_Velocity_Demand": rotary_demand,
           "Sharpness_Angle": sharpness_angle,
           "Is_Motion_Block": is_motion,
           "Is_Reversal_X": is_reversal_x,
