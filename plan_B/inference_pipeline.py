@@ -49,8 +49,8 @@ def predict_nc_file(mpf_filepath: str,
     # 1. Batas Atas: Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
     predicted_feedrate = np.minimum(raw_predicted_feedrate, cmd_f_limits)
 
-    # 2. Batas Bawah: Tebakan AI minimal 10% dari commanded feedrate (mencegah anomali waktu meledak)
-    min_feedrate_limits = 0.10 * cmd_f_limits
+    # 2. Batas Bawah: Tebakan AI minimal 1% dari commanded feedrate atau minimal absolut 1.0 (mencegah anomali waktu meledak, namun membiarkan pengereman tajam 5-Axis)
+    min_feedrate_limits = np.maximum(0.01 * cmd_f_limits, 1.0)
     predicted_feedrate = np.maximum(predicted_feedrate, min_feedrate_limits)
     # --------------------------------------------
 
