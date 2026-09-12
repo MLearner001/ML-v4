@@ -49,8 +49,12 @@ def predict_nc_file(mpf_filepath: str,
     # 1. Batas Atas: Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
     predicted_feedrate = np.minimum(raw_predicted_feedrate, cmd_f_limits)
 
-    # 2. Batas Bawah: Tebakan AI minimal 0.5% dari commanded feedrate atau minimal absolut 1.0 (mencegah anomali waktu meledak, namun membiarkan pengereman tajam 5-Axis)
-    min_feedrate_limits = np.maximum(0.005 * cmd_f_limits, 1.0)
+    # 2. Batas Bawah: Hybrid Clamping (10% untuk gerak linear murni, 1% untuk gerak 5-Axis/rotasi)
+    # Ini mencegah anomali waktu meledak pada garis lurus, namun membiarkan pengereman tajam pada 5-Axis
+    is_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
+    min_multiplier = np.where(is_rotary, 0.01, 0.10)
+
+    min_feedrate_limits = np.maximum(min_multiplier * cmd_f_limits, 1.0)
     predicted_feedrate = np.maximum(predicted_feedrate, min_feedrate_limits)
     # --------------------------------------------
 
