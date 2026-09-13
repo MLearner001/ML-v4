@@ -345,6 +345,11 @@ class NCParser:
           # [Fase 2] Kinematic Blend Ratio (Rotasi per Translasi)
           blend_ratio = 0.0 / (delta_3d + 1e-6)
 
+          # --- FITUR FISIKA NEWTONIAN ---
+          # v_max = sqrt(2 * A * d) dengan A = 1000 mm/s^2
+          v_max_sec = math.sqrt(2 * 1000.0 * delta_3d)
+          kinematic_limit = v_max_sec * 60.0
+
           # [Fase 2 Update] Theoretical Duration (Seconds)
           # Asumsi minimal velocity 1.0 mm/min untuk menghindari div by zero
           safe_f = max(1.0, effective_f)
@@ -377,6 +382,7 @@ class NCParser:
               "Turn_Count": 0.0,
               "Is_Partial_Arc": 0,
               "Is_Z_Plunge": 0,
+              "Kinematic_Speed_Limit": round(kinematic_limit, 3),
               "Tgt_X": sub_x,
               "Tgt_Y": sub_y,
               "Tgt_Z": sub_z,
@@ -521,6 +527,10 @@ class NCParser:
       # [Fase 2] Rotary Velocity Demand (Limit Jerk)
       rotary_demand = blend_ratio * effective_limit_f
 
+      # --- FITUR FISIKA NEWTONIAN ---
+      v_max_sec = math.sqrt(2 * 1000.0 * delta_3d)
+      kinematic_limit = v_max_sec * 60.0
+
       # [Fase 2 Update] Theoretical Duration (Seconds)
       safe_f = max(1.0, effective_limit_f)
       # Jika hanya rotasi tanpa translasi, kita menggunakan estimasi kecepatan rotasi B/C maksimal (misal 5000 derajat/menit)
@@ -562,6 +572,7 @@ class NCParser:
           "Turn_Count": turn_val,
           "Is_Partial_Arc": is_partial_arc,
           "Is_Z_Plunge": is_z_plunge,
+          "Kinematic_Speed_Limit": round(kinematic_limit, 3),
           "Tgt_X": tgt_x,
           "Tgt_Y": tgt_y,
           "Tgt_Z": tgt_z,
