@@ -46,16 +46,19 @@ def predict_nc_file(mpf_filepath: str,
     # Ambil batas kecepatan komando (G01 F... atau limit G00) dari parser
     cmd_f_limits = df_parsed['Cmd_F'].values
 
-    # 1. Batas Atas: Tebakan AI TIDAK BOLEH melebihi batas yang diperintahkan program
-    predicted_feedrate = np.minimum(raw_predicted_feedrate, cmd_f_limits)
+    # 1. Batas Atas & Bawah diatur via np.clip
 
-    # 2. Batas Bawah: Hybrid Clamping (10% untuk gerak linear murni, 1% untuk gerak 5-Axis/rotasi)
-    # Ini mencegah anomali waktu meledak pada garis lurus, namun membiarkan pengereman tajam pada 5-Axis
+    # 2. Batas Bawah: Hybrid Clamping (10% untuk gerak linear normal, 1% untuk gerak 5-Axis/rotasi ATAU Micro-Block)
+    # Ini mencegah anomali waktu meledak pada garis lurus panjang, namun membiarkan pengereman tajam pada 5-Axis atau blok super pendek
     is_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
-    min_multiplier = np.where(is_rotary, 0.01, 0.10)
+    is_micro = df_parsed['Delta_3D'].values < 0.5
+
+    min_multiplier = np.where(is_rotary | is_micro, 0.01, 0.10)
 
     min_feedrate_limits = np.maximum(min_multiplier * cmd_f_limits, 1.0)
-    predicted_feedrate = np.maximum(predicted_feedrate, min_feedrate_limits)
+
+    # Gunakan np.clip untuk menjepit tebakan agar berada di antara batas bawah dan batas atas Cmd_F
+    predicted_feedrate = np.clip(raw_predicted_feedrate, min_feedrate_limits, cmd_f_limits)
     # --------------------------------------------
 
     # 5. Integrasi Kinematika Fisik & Pengecekan Validitas
