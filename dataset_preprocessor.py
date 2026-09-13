@@ -23,7 +23,7 @@ class DatasetPreprocessor:
             'Cmd_F', 'Cmd_S', 'Is_G01', 'Is_G02', 'Is_G03', 'Is_Traori',
             'Is_Cycle800', 'Is_MCALL_Sub', 'C832_Tol', 'C832_Mode',
             'Delta_3D', 'Delta_Rot', 'Tool_Vector_Delta', 'Kinematic_Blend_Ratio', 'Rotary_Velocity_Demand', 'Sharpness_Angle',
-            'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Theo_Duration'
+            'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Theo_Duration', 'Turn_Count', 'Is_Partial_Arc'
         ]
 
     def _apply_log_transforms(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
@@ -74,7 +74,7 @@ class DatasetPreprocessor:
 
         binary_cols = ['Is_G01', 'Is_G02', 'Is_G03', 'Is_Traori', 'Is_Cycle800',
                        'Is_MCALL_Sub', 'Is_Motion_Block', 'Is_Reversal_X',
-                       'Is_Reversal_Y', 'Is_Reversal_Z']
+                       'Is_Reversal_Y', 'Is_Reversal_Z', 'Is_Partial_Arc']
 
         for col in binary_cols:
             if col in self.feature_cols:
@@ -96,6 +96,10 @@ class DatasetPreprocessor:
         if 'Theo_Duration' in standstill_df.columns:
             # Durasi diam = 0
             standstill_df['Theo_Duration'] = 0.0
+        if 'Turn_Count' in standstill_df.columns:
+            standstill_df['Turn_Count'] = 0.0
+        if 'Is_Partial_Arc' in standstill_df.columns:
+            standstill_df['Is_Partial_Arc'] = 0
         if 'Target_Feedrate' in standstill_df.columns:
             standstill_df['Target_Feedrate'] = 0.0
 
