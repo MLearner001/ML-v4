@@ -376,6 +376,7 @@ class NCParser:
               "C832_Mode": self.state.c832_mode,
               "Turn_Count": 0.0,
               "Is_Partial_Arc": 0,
+              "Is_Z_Plunge": 0,
               "Tgt_X": sub_x,
               "Tgt_Y": sub_y,
               "Tgt_Z": sub_z,
@@ -510,6 +511,10 @@ class NCParser:
       # [V2 UPDATE] Set limit untuk G00 vs G01
       effective_limit_f = self.MAX_RAPID if self.state.motion_mode == "G00" else self.state.cmd_f
 
+      # Deteksi Plunging Z Murni yang Lambat (< 200 mm/min)
+      is_pure_z = (abs(dx) < 1e-4) and (abs(dy) < 1e-4) and (abs(dz) > 1e-4)
+      is_z_plunge = 1 if (is_pure_z and effective_limit_f < 200.0) else 0
+
       # [Fase 2] Kinematic Blend Ratio
       blend_ratio = delta_rot / (delta_3d + 1e-5)
 
@@ -556,6 +561,7 @@ class NCParser:
           "C832_Mode": self.state.c832_mode,
           "Turn_Count": turn_val,
           "Is_Partial_Arc": is_partial_arc,
+          "Is_Z_Plunge": is_z_plunge,
           "Tgt_X": tgt_x,
           "Tgt_Y": tgt_y,
           "Tgt_Z": tgt_z,
