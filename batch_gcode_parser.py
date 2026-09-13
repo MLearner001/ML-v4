@@ -195,6 +195,9 @@ class NCParser:
     # Absolute sequential execution index to avoid N99999 reset issues
     absolute_idx = 1
 
+    n_offset = 0
+    prev_n = 0
+
     for raw_line in lines:
       line = raw_line.strip()
       # Hapus komentar (ditandai dengan semicolon ;)
@@ -205,7 +208,16 @@ class NCParser:
 
       # 1. Ekstraksi Block ID (Nomor Baris N)
       block_match = re.search(r"^N(\d+)", line, re.IGNORECASE)
-      n_number = int(block_match.group(1)) if block_match else None
+      if block_match:
+          raw_n = int(block_match.group(1))
+          # Deteksi rollover: Jika tiba-tiba angka N drop sangat jauh (misal dari 99999 ke 1)
+          if raw_n < prev_n and (prev_n - raw_n) > 50000:
+              n_offset += 99999  # Sesuaikan dengan batas maksimal digit NC Anda
+
+          prev_n = raw_n
+          n_number = raw_n + n_offset
+      else:
+          n_number = None
 
       block_id = str(absolute_idx)
 
