@@ -374,6 +374,9 @@ class NCParser:
               "Is_MCALL_Sub": 1,
               "C832_Tol": self.state.c832_tol,
               "C832_Mode": self.state.c832_mode,
+              "Turn_Count": 0.0,
+              "Is_Partial_Arc": 0,
+              "Is_Z_Plunge": 0,
               "Tgt_X": sub_x,
               "Tgt_Y": sub_y,
               "Tgt_Z": sub_z,
@@ -431,6 +434,8 @@ class NCParser:
           delta_rot = math.degrees(tool_vec_delta)
 
       # Circular motions (G02/G03) are smooth arcs, not sharp lines.
+      is_partial_arc = 0
+
       if self.state.motion_mode in ["G02", "G03"]:
         sharpness_angle = 0.0
         is_reversal_x = 0
@@ -466,8 +471,10 @@ class NCParser:
                 # Jika ada parameter TURN, gunakan turn_val. Jika tidak, asumsikan 1 putaran penuh.
                 circles = turn_val if turn_val > 0 else 1
                 total_arc_xy = circles * 2 * math.pi * radius
+                is_partial_arc = 0
             else:
                 # Hitung busur parsial (Partial Arc)
+                is_partial_arc = 1
                 ratio = chord_xy / (2.0 * radius)
                 ratio = max(-1.0, min(1.0, ratio)) # Clip to avoid domain errors
                 theta = 2.0 * math.asin(ratio)
@@ -480,6 +487,8 @@ class NCParser:
             delta_3d = math.sqrt(total_arc_xy**2 + dz**2)
 
       else:
+        turn_val = 0
+        is_partial_arc = 0
         sharpness_angle = self._calculate_sharpness_angle(
             (self.state.prev_dx, self.state.prev_dy, self.state.prev_dz),
             (dx, dy, dz),
@@ -501,6 +510,10 @@ class NCParser:
 
       # [V2 UPDATE] Set limit untuk G00 vs G01
       effective_limit_f = self.MAX_RAPID if self.state.motion_mode == "G00" else self.state.cmd_f
+
+      # Deteksi Plunging Z Murni yang Lambat (< 200 mm/min)
+      is_pure_z = (abs(dx) < 1e-4) and (abs(dy) < 1e-4) and (abs(dz) > 1e-4)
+      is_z_plunge = 1 if (is_pure_z and effective_limit_f < 200.0) else 0
 
       # [Fase 2] Kinematic Blend Ratio
       blend_ratio = delta_rot / (delta_3d + 1e-5)
@@ -546,6 +559,9 @@ class NCParser:
           "Is_MCALL_Sub": 0,
           "C832_Tol": self.state.c832_tol,
           "C832_Mode": self.state.c832_mode,
+          "Turn_Count": turn_val,
+          "Is_Partial_Arc": is_partial_arc,
+          "Is_Z_Plunge": is_z_plunge,
           "Tgt_X": tgt_x,
           "Tgt_Y": tgt_y,
           "Tgt_Z": tgt_z,
