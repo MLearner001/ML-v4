@@ -25,9 +25,9 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     pooled_x = layers.GlobalAveragePooling1D(name="Attention_Pooling")(attention_out)
 
     # 2. Jalur Pintas Dinamis (Center-Block Bypass)
-    # Mengambil indeks tengah secara otomatis, W=301 -> Index 150
+    # Mengambil indeks tengah secara otomatis, W=301 -> Index 150 (Menggunakan Slicing native Keras, tanpa Lambda untuk menghindari Crash Python 3.13)
     center_idx = input_shape[0] // 2
-    center_block = layers.Lambda(lambda tensor: tensor[:, center_idx, :], name="Center_Block_Features")(inputs)
+    center_block = inputs[:, center_idx, :]
 
     # 3. Penggabungan (Concatenate)
     merged = layers.Concatenate(name="Attention_and_Bypass_Concat")([pooled_x, center_block])
@@ -40,7 +40,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_Plan_B")
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4)
-    model.compile(optimizer=optimizer, loss=tf.keras.losses.Huber(delta=1.0), metrics=["mae", "mse"])
+    model.compile(optimizer=optimizer, loss=tf.keras.losses.Huber(delta=0.1), metrics=["mae", "mse"])
 
     return model
 
