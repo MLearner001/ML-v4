@@ -28,8 +28,8 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     pooled_x = layers.GlobalMaxPooling1D(name="Global_Max_Pooling")(x)
 
     # 2. Jalur Pintas (Center-Block Bypass)
-    # Mengambil indeks ke-50 (tengah) dari input berukuran 101
-    center_block = layers.Lambda(lambda tensor: tensor[:, 50, :], name="Center_Block_Features")(inputs)
+    # Mengambil indeks ke-50 (tengah) dari input berukuran 101 (Menggunakan Slicing native Keras, tanpa Lambda untuk menghindari Crash Python 3.13)
+    center_block = inputs[:, 50, :]
 
     # 3. Penggabungan (Concatenate)
     merged = layers.Concatenate(name="LSTM_and_Bypass_Concat")([pooled_x, center_block])
