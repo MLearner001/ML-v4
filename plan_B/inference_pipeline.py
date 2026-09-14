@@ -10,6 +10,7 @@ import pandas as pd
 import tensorflow as tf
 from batch_gcode_parser import NCParser
 from dataset_preprocessor import DatasetPreprocessor, SlidingWindowGenerator
+from train_bi_lstm import build_bilstm_model
 from typing import Dict
 
 import os
@@ -35,7 +36,13 @@ def predict_nc_file(mpf_filepath: str,
     infer_generator = SlidingWindowGenerator([df_parsed], preprocessor, batch_size=256, is_training=False)
 
     print(f"[INFO] 3. Memuat Model Bi-LSTM & Menjalankan Inferensi...")
-    model = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
+    # Bangun kerangka arsitektur secara lokal (kompatibel dengan Lambda)
+    input_shape = (preprocessor.window_size, len(preprocessor.feature_cols))
+    model = build_bilstm_model(input_shape=input_shape)
+
+    # Suntikkan bobot hasil training
+    model.load_weights(model_path)
+
     y_pred_scaled = model.predict(infer_generator, verbose=1)
 
     # 4. Inverse Transform untuk Mendapatkan Waktu Aktual (Detik)
