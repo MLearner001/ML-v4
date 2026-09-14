@@ -86,10 +86,36 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
             self.wait_stop += 1
 
             if self.wait_lr >= self.patience_lr:
-                old_lr = float(self.model.optimizer.learning_rate)
+                # Keras 3 / TF 2 safe LR reduction
+                if hasattr(self.model.optimizer, 'learning_rate'):
+                    lr_var = self.model.optimizer.learning_rate
+                elif hasattr(self.model.optimizer, 'lr'):
+                    lr_var = self.model.optimizer.lr
+                else:
+                    raise AttributeError("Optimizer does not have 'learning_rate' or 'lr' attribute.")
+
+                try:
+                    old_lr = float(lr_var.numpy())
+                except AttributeError:
+                    try:
+                        old_lr = float(tf.keras.backend.get_value(lr_var))
+                    except Exception:
+                        old_lr = float(lr_var)
+
                 new_lr = max(old_lr * self.factor, self.min_lr)
+
                 if old_lr > self.min_lr:
-                    self.model.optimizer.learning_rate = new_lr
+                    try:
+                        if hasattr(lr_var, 'assign'):
+                            lr_var.assign(new_lr)
+                        else:
+                            tf.keras.backend.set_value(lr_var, new_lr)
+                    except Exception:
+                        if hasattr(self.model.optimizer, 'learning_rate'):
+                            self.model.optimizer.learning_rate = new_lr
+                        else:
+                            self.model.optimizer.lr = new_lr
+
                     print(f"\n[DualMonitor] Epoch {epoch+1}: Keduanya stagnan. Menurunkan learning rate menjadi {new_lr}.")
                 self.wait_lr = 0
 
