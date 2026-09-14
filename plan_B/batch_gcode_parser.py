@@ -391,6 +391,11 @@ class NCParser:
               "Delta_3D": delta_3d,
               "Delta_Rot": 0.0,
               "Tool_Vector_Delta": 0.0,
+              "Delta_B": 0.0,
+              "Delta_C": 0.0,
+              "Delta_A3": 0.0,
+              "Delta_B3": 0.0,
+              "Delta_C3": 0.0,
               "Kinematic_Blend_Ratio": blend_ratio,
               "Rotary_Velocity_Demand": 0.0,
               "Sharpness_Angle": angle,
@@ -434,10 +439,33 @@ class NCParser:
       delta_rot = math.sqrt(db**2 + dc**2)
       tool_vec_delta = math.sqrt(da3**2 + db3**2 + dc3**2)
 
-      # --- PATCH 5-AXIS PERMANEN ---
-      # Konversi vektor menjadi derajat jika rotasi eksplisit 0
+      # --- PATCH 5-AXIS PERMANEN (Dot Product & Inverse Kinematics) ---
+      # 1. Total Delta Rotasi menggunakan Dot Product
       if delta_rot < 1e-6 and tool_vec_delta > 1e-6:
-          delta_rot = math.degrees(tool_vec_delta)
+          norm_prev = math.sqrt(self.state.a3**2 + self.state.b3**2 + self.state.c3**2)
+          norm_curr = math.sqrt(tgt_a3**2 + tgt_b3**2 + tgt_c3**2)
+          if norm_prev > 1e-6 and norm_curr > 1e-6:
+              dot_prod = ((self.state.a3 * tgt_a3) + (self.state.b3 * tgt_b3) + (self.state.c3 * tgt_c3)) / (norm_prev * norm_curr)
+              dot_prod = max(-1.0, min(1.0, dot_prod)) # Cegah domain error
+              delta_rot = math.degrees(math.acos(dot_prod))
+
+      # 2. Terjemahan Vektor ke Sumbu B & C Aktual (Kinematika Invers)
+      implied_b = math.degrees(math.acos(max(-1.0, min(1.0, tgt_c3))))
+      implied_c = math.degrees(math.atan2(tgt_b3, tgt_a3))
+
+      prev_implied_b = math.degrees(math.acos(max(-1.0, min(1.0, self.state.c3))))
+      prev_implied_c = math.degrees(math.atan2(self.state.b3, self.state.a3))
+
+      # Shortest path untuk C agar tidak lompat 360 derajat
+      dc_vec_diff = (implied_c - prev_implied_c + 180) % 360 - 180
+      db_vec_diff = implied_b - prev_implied_b
+
+      if self.state.is_traori or tool_vec_delta > 1e-6:
+          final_delta_b = max(abs(db), abs(db_vec_diff))
+          final_delta_c = max(abs(dc), abs(dc_vec_diff))
+      else:
+          final_delta_b = abs(db)
+          final_delta_c = abs(dc)
 
       # Circular motions (G02/G03) are smooth arcs, not sharp lines.
       is_partial_arc = 0
@@ -581,6 +609,11 @@ class NCParser:
           "Delta_3D": delta_3d,
           "Delta_Rot": delta_rot,
           "Tool_Vector_Delta": tool_vec_delta,
+          "Delta_B": final_delta_b if 'final_delta_b' in locals() else 0.0,
+          "Delta_C": final_delta_c if 'final_delta_c' in locals() else 0.0,
+          "Delta_A3": abs(da3) if 'da3' in locals() else 0.0,
+          "Delta_B3": abs(db3) if 'db3' in locals() else 0.0,
+          "Delta_C3": abs(dc3) if 'dc3' in locals() else 0.0,
           "Kinematic_Blend_Ratio": blend_ratio,
           "Rotary_Velocity_Demand": rotary_demand,
           "Sharpness_Angle": sharpness_angle,

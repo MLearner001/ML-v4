@@ -86,10 +86,10 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
             self.wait_stop += 1
 
             if self.wait_lr >= self.patience_lr:
-                old_lr = tf.keras.backend.get_value(self.model.optimizer.lr)
+                old_lr = float(self.model.optimizer.learning_rate)
                 new_lr = max(old_lr * self.factor, self.min_lr)
                 if old_lr > self.min_lr:
-                    tf.keras.backend.set_value(self.model.optimizer.lr, new_lr)
+                    self.model.optimizer.learning_rate = new_lr
                     print(f"\n[DualMonitor] Epoch {epoch+1}: Keduanya stagnan. Menurunkan learning rate menjadi {new_lr}.")
                 self.wait_lr = 0
 
