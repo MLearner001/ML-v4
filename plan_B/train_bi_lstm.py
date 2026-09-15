@@ -88,19 +88,21 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
             if self.wait_lr >= self.patience_lr:
                 # Keras 3 / TF 2 safe LR reduction
                 if hasattr(self.model.optimizer, 'learning_rate'):
-                    lr_var = self.model.optimizer.learning_rate
+                    lr_attr = 'learning_rate'
                 elif hasattr(self.model.optimizer, 'lr'):
-                    lr_var = self.model.optimizer.lr
+                    lr_attr = 'lr'
                 else:
                     raise AttributeError("Optimizer does not have 'learning_rate' or 'lr' attribute.")
 
+                lr_var = getattr(self.model.optimizer, lr_attr)
+
                 try:
-                    old_lr = float(lr_var.numpy())
-                except AttributeError:
-                    try:
-                        old_lr = float(tf.keras.backend.get_value(lr_var))
-                    except Exception:
-                        old_lr = float(lr_var)
+                    if hasattr(lr_var, 'numpy'):
+                        old_lr = float(lr_var.numpy())
+                    else:
+                        old_lr = float(K.get_value(lr_var))
+                except Exception:
+                    old_lr = float(lr_var)
 
                 new_lr = max(old_lr * self.factor, self.min_lr)
 
@@ -109,12 +111,10 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
                         if hasattr(lr_var, 'assign'):
                             lr_var.assign(new_lr)
                         else:
-                            tf.keras.backend.set_value(lr_var, new_lr)
+                            K.set_value(lr_var, new_lr)
                     except Exception:
-                        if hasattr(self.model.optimizer, 'learning_rate'):
-                            self.model.optimizer.learning_rate = new_lr
-                        else:
-                            self.model.optimizer.lr = new_lr
+                        # Fallback for Keras 3 direct assignment
+                        setattr(self.model.optimizer, lr_attr, new_lr)
 
                     print(f"\n[DualMonitor] Epoch {epoch+1}: Keduanya stagnan. Menurunkan learning rate menjadi {new_lr}.")
                 self.wait_lr = 0
