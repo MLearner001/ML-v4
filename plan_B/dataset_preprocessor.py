@@ -24,11 +24,17 @@ class DatasetPreprocessor:
             'Is_Cycle800', 'Is_MCALL_Sub', 'C832_Tol', 'C832_Mode',
             'Delta_3D', 'Delta_Rot', 'Tool_Vector_Delta', 'Kinematic_Blend_Ratio', 'Rotary_Velocity_Demand', 'Sharpness_Angle',
             'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Theo_Duration', 'Turn_Count', 'Is_Partial_Arc', 'Is_Z_Plunge',
-            'Kinematic_Speed_Limit'
+            'Kinematic_Speed_Limit', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3'
         ]
 
     def _apply_log_transforms(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         df_out = df.copy()
+
+        # Kompresi logaritmik tambahan untuk seluruh sumbu putar & vektor
+        rot_features = ['Delta_Rot', 'Tool_Vector_Delta', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3']
+        for col in rot_features:
+            if col in df_out.columns:
+                df_out[col] = np.log1p(np.maximum(0.0, df_out[col].values))
 
         # Kompresi logaritmik untuk meredam rentang ekstrem
         df_out['Delta_3D'] = np.log1p(np.maximum(0.0, df_out['Delta_3D'].values))
@@ -107,6 +113,9 @@ class DatasetPreprocessor:
             standstill_df['Is_Z_Plunge'] = 0
         if 'Kinematic_Speed_Limit' in standstill_df.columns:
             standstill_df['Kinematic_Speed_Limit'] = 0.0
+        for col in ['Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3']:
+            if col in standstill_df.columns:
+                standstill_df[col] = 0.0
         if 'Target_Feedrate' in standstill_df.columns:
             standstill_df['Target_Feedrate'] = 0.0
 
