@@ -215,6 +215,7 @@ if __name__ == "__main__":
     train_parser.add_argument("--lstm-units", type=int, default=128, help="Kapasitas neuron model untuk Fase 2 (default: 128)")
     train_parser.add_argument("--epochs", type=int, default=100, help="Total epochs untuk pelatihan")
     train_parser.add_argument("--batch-size", type=int, default=128, help="Ukuran batch untuk generator (low RAM) / numpy (high RAM)")
+    train_parser.add_argument("--precision", type=str, choices=["float32", "mixed_float16"], default="float32", help="Pilih presisi GPU (Gunakan mixed_float16 untuk memacu RTX 3080 Ti/Tensor Cores)")
 
     # Subparser untuk mode INFERENCE
     infer_parser = subparsers.add_parser("infer", help="Jalankan Pipeline Prediksi Standalone (Batch)")
@@ -222,6 +223,15 @@ if __name__ == "__main__":
     infer_parser.add_argument("--out-dir", type=str, default="output", help="Path folder berisi model/scaler (dan tempat menyimpan hasil prediksi)")
 
     args = parser.parse_args()
+
+    # --- TAMBAHAN LOGIKA PRESISI GPU ---
+    if hasattr(args, 'precision') and args.precision == "mixed_float16":
+        from tensorflow.keras import mixed_precision
+        mixed_precision.set_global_policy('mixed_float16')
+        print("\n" + "="*50)
+        print("[🚀 INFO] TENSOR CORES AKTIF: Mode mixed_float16 dijalankan!")
+        print("="*50 + "\n")
+    # -----------------------------------
 
     if args.mode == "train":
         if not os.path.exists(args.train_dir) or not os.path.isdir(args.train_dir):
