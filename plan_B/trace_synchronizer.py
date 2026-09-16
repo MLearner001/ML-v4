@@ -147,9 +147,13 @@ class SinuTrainSynchronizer:
 
             current_row = df_gcode.iloc[i]
 
-            # Opsi A: Jika blok KASUS B (0 tick) tapi memiliki Delta_3D > 1.0,
+            # Memeriksa apakah blok saat ini adalah gerakan Rapid atau Orientasi Bidang
+            is_cutting_move = (current_row.get('Is_G01', 0) == 1) or (current_row.get('Is_G02', 0) == 1) or (current_row.get('Is_G03', 0) == 1)
+            is_rapid_or_c800 = (not is_cutting_move) or (current_row.get('Is_Cycle800', 0) == 1)
+
+            # Opsi A: Jika blok KASUS B (0 tick) tapi merupakan gerakan Rapid atau C800,
             # jangan cari anchor, proses sendiri dengan min dt.
-            if ticks == 0 and current_row['Delta_3D'] > 1.0:
+            if ticks == 0 and is_rapid_or_c800:
                 cluster_dt = self.dt
                 # Tetap j = i + 1 karena blok ini tidak digabungkan
             elif ticks > 0:
@@ -167,14 +171,18 @@ class SinuTrainSynchronizer:
 
                 cluster_dt = ticks * self.dt
             else:
-                # KASUS B: Micro-blocks (0 ticks) - SinuTrain melompati blok ini
+                # KASUS B: Micro-blocks (0 ticks) - SinuTrain melompati blok ini (CYCLE832 dikompresi)
                 # Lakukan Look-Ahead: Gabungkan blok ini dengan blok-blok berikutnya
                 # hingga menemukan blok "Anchor" yang terekam di trace (>0 ticks).
                 anchor_ticks = 0
                 while j < n_blocks:
                     row_j = df_gcode.iloc[j]
-                    # Opsi B: jika di tengah pencarian menemukan blok dengan Delta_3D > 1.0, hentikan
-                    if row_j['Delta_3D'] > 1.0:
+
+                    # Opsi B: jika di tengah pencarian menemukan blok Rapid atau C800, hentikan kluster
+                    is_cutting_j = (row_j.get('Is_G01', 0) == 1) or (row_j.get('Is_G02', 0) == 1) or (row_j.get('Is_G03', 0) == 1)
+                    is_rapid_or_c800_j = (not is_cutting_j) or (row_j.get('Is_Cycle800', 0) == 1)
+
+                    if is_rapid_or_c800_j:
                         break
 
                     cluster_indices.append(j)
