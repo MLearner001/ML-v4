@@ -28,44 +28,29 @@ if physical_devices:
     except RuntimeError as e:
         print(e)
 
-def run_training_pipeline(data_dir: str, out_dir: str, mem_mode: str = "high",
-                          resume_model: str = None, resume_scaler: str = None,
-                          learning_rate: float = 1e-3, initial_epoch: int = 0,
-                          lstm_units: int = 256, epochs: int = 100, batch_size: int = 128):
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-
-    output_model = os.path.join(out_dir, "bilstm_feedrate_model.keras")
-    scaler_path = os.path.join(out_dir, "scaler.pkl")
-
-    print(f"\n{'='*50}\n[MEMULAI BATCH TRAINING]\nMencari pasangan file G-Code (.mpf) dan Trace (.csv) di folder: {data_dir}\n{'='*50}")
-
-    # Cari semua file G-Code (.mpf atau .nc)
+def process_directory(data_dir: str, out_dir: str) -> list:
+    """Membaca, mem-parsing, dan menyinkronisasi data G-Code dan Trace dari sebuah direktori."""
+    print(f"\n{'='*50}\nMencari pasangan file G-Code (.mpf) dan Trace (.csv) di folder: {data_dir}\n{'='*50}")
     gcode_files = glob.glob(os.path.join(data_dir, "*.mpf")) + glob.glob(os.path.join(data_dir, "*.nc"))
     if not gcode_files:
-        print("[ERROR] Tidak ditemukan file .mpf atau .nc di folder tersebut.")
-        sys.exit(1)
+        print(f"[WARNING] Tidak ditemukan file .mpf atau .nc di folder {data_dir}.")
+        return []
 
     synced_dfs = []
-
     for gcode_file in gcode_files:
         base_name = os.path.splitext(os.path.basename(gcode_file))[0]
-
         synced_filename = f"{base_name}_synced.csv"
         synced_output = os.path.join(out_dir, synced_filename)
 
         print(f"\n--- Memproses Pasangan: {base_name} ---")
 
-        # JIKA SUDAH PERNAH DI-SINKRONISASI (Resume dari Tahap 3)
         if os.path.exists(synced_output):
             print(f"[TAHAP 1 & 2 SKIPPED] Memuat langsung file sinkronisasi dari: {synced_output}")
             df_synced = pd.read_csv(synced_output, low_memory=False)
             synced_dfs.append(df_synced)
             continue
 
-        # Cari pasangan file trace (.csv) jika belum ada cache
         trace_file = os.path.join(data_dir, f"{base_name}.csv")
-
         if not os.path.exists(trace_file):
             print(f"[WARNING] Melewati {base_name}: Tidak ditemukan file trace pasangannya ({trace_file})")
             continue
@@ -75,44 +60,58 @@ def run_training_pipeline(data_dir: str, out_dir: str, mem_mode: str = "high",
         df_parsed = parser.parse_file(gcode_file)
 
         print("[TAHAP 2] Sinkronisasi Trace SinuTrain...")
-
-        # Deteksi Header & Separator secara otomatis untuk Trace SinuTrain
-        # karena sering mengandung metadata di atas dan menggunakan titik koma (;)
         header_idx = 0
         detected_sep = ','
 
         with open(trace_file, 'r', encoding='utf-8', errors='ignore') as f:
             for i, line in enumerate(f):
-                # Cari baris yang merupakan header aktual data time series (diawali dengan 'time')
                 if line.startswith('time'):
                     header_idx = i
                     if ';' in line:
                         detected_sep = ';'
                     break
 
-        # Membaca trace SinuTrain menggunakan skip-rows dan error_bad_lines/on_bad_lines dinonaktifkan
         try:
             df_trace = pd.read_csv(trace_file, skiprows=header_idx, sep=detected_sep, low_memory=False, on_bad_lines='skip')
         except TypeError:
-            # Fallback untuk versi pandas lama
             df_trace = pd.read_csv(trace_file, skiprows=header_idx, sep=detected_sep, low_memory=False, error_bad_lines=False)
-        # Bersihkan spasi whitespace di nama kolom
+
         df_trace.columns = df_trace.columns.str.strip()
 
         syncer = SinuTrainSynchronizer()
         df_trace_clean = syncer.clean_and_attribute_trace(df_trace, df_parsed['Block_ID'].tolist())
         df_synced = syncer.match_and_calculate_targets(df_parsed, df_trace_clean)
 
-        synced_filename = f"{base_name}_synced.csv"
-        synced_output = os.path.join(out_dir, synced_filename)
         df_synced.to_csv(synced_output, index=False)
         print(f"-> Tersinkronisasi ({len(df_synced)} baris), disimpan ke: {synced_output}")
 
         synced_dfs.append(df_synced)
 
-    if not synced_dfs:
-        print("\n[ERROR] Tidak ada satupun pasangan file yang berhasil disinkronisasi.")
+    return synced_dfs
+
+
+def run_training_pipeline(train_dir: str, val_dir: str, out_dir: str, mem_mode: str = "high",
+                          resume_model: str = None, resume_scaler: str = None,
+                          learning_rate: float = 1e-3, initial_epoch: int = 0,
+                          lstm_units: int = 256, epochs: int = 100, batch_size: int = 128):
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    output_model = os.path.join(out_dir, "bilstm_feedrate_model.keras")
+    scaler_path = os.path.join(out_dir, "scaler.pkl")
+
+    print(f"\n{'='*50}\n[MEMULAI BATCH TRAINING]\n{'='*50}")
+
+    print("\n--- Memproses Data Training ---")
+    train_dfs = process_directory(train_dir, out_dir)
+    if not train_dfs:
+        print("\n[ERROR] Tidak ada satupun pasangan file training yang berhasil disinkronisasi.")
         sys.exit(1)
+
+    val_dfs = []
+    if val_dir and os.path.exists(val_dir):
+        print("\n--- Memproses Data Validasi ---")
+        val_dfs = process_directory(val_dir, out_dir)
 
     print(f"\n{'='*50}\n[TAHAP 3] Scaling, Padding & Sequence Windowing (Batch)\n{'='*50}")
     preprocessor = DatasetPreprocessor(window_size=101)
@@ -122,18 +121,6 @@ def run_training_pipeline(data_dir: str, out_dir: str, mem_mode: str = "high",
         print(f"[INFO] Memuat resume Scaler State dari: {resume_scaler}")
         preprocessor.load_scalers(resume_scaler)
         is_resume_scaler = True
-
-    # Mengacak (shuffle) daftar file agar representasi variasi gerakan mesin
-    # (Drill, 5-Axis, Contour, dsb) tersebar rata di Training dan Validasi.
-    # Menggunakan konstanta Seed (42) agar pengacakan selalu sama setiap script di-run.
-    random.Random(42).shuffle(synced_dfs)
-
-    split_idx = int(0.8 * len(synced_dfs))
-    if split_idx == 0 and len(synced_dfs) > 0:
-        split_idx = 1 # Pastikan minimal ada 1 data training
-
-    train_dfs = synced_dfs[:split_idx]
-    val_dfs = synced_dfs[split_idx:]
 
     print(f"Menggunakan {len(train_dfs)} file untuk Training, {len(val_dfs)} file untuk Validasi.")
 
@@ -217,7 +204,8 @@ if __name__ == "__main__":
 
     # Subparser untuk mode TRAINING
     train_parser = subparsers.add_parser("train", help="Jalankan Pipeline Pelatihan End-to-End (Batch)")
-    train_parser.add_argument("--data-dir", type=str, required=True, help="Path folder data mentah (isi .mpf dan .csv)")
+    train_parser.add_argument("--train-dir", type=str, required=True, help="Path folder data mentah training (isi .mpf dan .csv)")
+    train_parser.add_argument("--val-dir", type=str, default=None, help="Path folder data mentah validasi (opsional)")
     train_parser.add_argument("--out-dir", type=str, default="output", help="Path folder hasil pipeline (default: output)")
     train_parser.add_argument("--mem-mode", type=str, choices=["high", "low"], default="high", help="Pilih 'high' untuk RAM besar (cepat) atau 'low' untuk RAM kecil (hemat memory).")
     train_parser.add_argument("--resume-model", type=str, default=None, help="Path ke model lama (.keras) untuk melanjutkan pelatihan (Transfer Learning)")
@@ -236,10 +224,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "train":
-        if not os.path.exists(args.data_dir) or not os.path.isdir(args.data_dir):
-            print("[ERROR] Pastikan argumen --data-dir adalah folder yang valid.")
+        if not os.path.exists(args.train_dir) or not os.path.isdir(args.train_dir):
+            print("[ERROR] Pastikan argumen --train-dir adalah folder yang valid.")
             sys.exit(1)
-        run_training_pipeline(args.data_dir, args.out_dir, args.mem_mode,
+        if args.val_dir and (not os.path.exists(args.val_dir) or not os.path.isdir(args.val_dir)):
+            print("[WARNING] Argumen --val-dir diberikan tetapi bukan folder yang valid. Proses validasi akan dilewati.")
+            args.val_dir = None
+
+        run_training_pipeline(args.train_dir, args.val_dir, args.out_dir, args.mem_mode,
                               args.resume_model, args.resume_scaler, args.lr,
                               args.initial_epoch, args.lstm_units,
                               args.epochs, args.batch_size)

@@ -156,9 +156,15 @@ def run_training(train_data, val_data,
 
     model.summary()
 
+    log_dir = os.path.dirname(model_save_path)
+    if not log_dir:
+        log_dir = "."
+    csv_log_path = os.path.join(log_dir, "training_history_log.csv")
+
     training_callbacks = [
         callbacks.ModelCheckpoint(model_save_path, monitor="val_loss", save_best_only=True, verbose=1),
-        DualMonitorCallback(factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6)
+        DualMonitorCallback(factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6),
+        callbacks.CSVLogger(csv_log_path, separator=",", append=True)
     ]
 
     # Tambahkan autosave (overwrite) setiap epoch ke dalam folder jika diminta
