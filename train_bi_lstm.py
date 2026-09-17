@@ -198,7 +198,10 @@ def run_training(train_data, val_data,
             epochs=epochs,
             initial_epoch=initial_epoch,
             callbacks=training_callbacks,
-            verbose=1
+            verbose=1,
+            workers=8,
+            use_multiprocessing=True,
+            max_queue_size=20
         )
 
     return model, history
