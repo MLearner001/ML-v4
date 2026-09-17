@@ -149,7 +149,7 @@ class SinuTrainSynchronizer:
 
             # Memeriksa apakah blok saat ini adalah gerakan Rapid atau Orientasi Bidang
             is_cutting_move = (current_row.get('Is_G01', 0) == 1) or (current_row.get('Is_G02', 0) == 1) or (current_row.get('Is_G03', 0) == 1)
-            is_rapid_or_c800 = (not is_cutting_move) or (current_row.get('Is_Cycle800', 0) == 1)
+            is_rapid_or_c800 = (not is_cutting_move)
 
             # Opsi A: Jika blok KASUS B (0 tick) tapi merupakan gerakan Rapid atau C800,
             # jangan cari anchor, proses sendiri dengan min dt.
@@ -180,7 +180,7 @@ class SinuTrainSynchronizer:
 
                     # Opsi B: jika di tengah pencarian menemukan blok Rapid atau C800, hentikan kluster
                     is_cutting_j = (row_j.get('Is_G01', 0) == 1) or (row_j.get('Is_G02', 0) == 1) or (row_j.get('Is_G03', 0) == 1)
-                    is_rapid_or_c800_j = (not is_cutting_j) or (row_j.get('Is_Cycle800', 0) == 1)
+                    is_rapid_or_c800_j = (not is_cutting_j)
 
                     if is_rapid_or_c800_j:
                         break
