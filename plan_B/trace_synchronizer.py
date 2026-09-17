@@ -235,25 +235,18 @@ class SinuTrainSynchronizer:
                         # disembunyikan di subprogram dan mencampuradukkan fase G00 & G01.
                         f_clamped = cmd_f_limit
                     else:
-                        # 1. Hitung Harmonik Feedrate Sejati (Fisika Murni: Jarak Total / Waktu Total)
-                        f_raw = (total_cluster_dist / cluster_dt) * 60.0
+                        # LANGKAH 1: Ambil data aktual (sensor) dari block anchor (elemen terakhir dari cluster)
+                        anchor_key = get_sync_key(cluster_indices[-1])
+                        actual_sensor_vel = trace_mean_vels.get(anchor_key, 0)
 
-                        if len(cluster_indices) > 1:
-                            # 2A. Jika ini KUMPULAN MICRO-BLOCKS (CYCLE832):
-                            # Kecepatan sesaat dari trace tidak valid untuk seluruh kurva.
-                            # Paksa gunakan Harmonik Feedrate murni!
-                            f_clamped = min(f_raw, cmd_f_limit)
+                        if actual_sensor_vel > 0:
+                            # LANGKAH 2 & 3: Copy kecepatan aktual anchor ke seluruh micro-blocks,
+                            # dijepit oleh command limit agar tidak melanggar batas G-Code.
+                            f_clamped = min(actual_sensor_vel, cmd_f_limit)
                         else:
-                            # 2B. Jika ini BLOK TUNGGAL:
-                            specific_key = get_sync_key(k)
-                            specific_trace_vel = trace_mean_vels.get(specific_key, 0)
-                            active_trace_vel = specific_trace_vel if specific_trace_vel > 0 else trace_vel
-
-                            if active_trace_vel > 0:
-                                # Ambil yang paling masuk akal (terendah) antara Fisika vs Sensor
-                                f_clamped = min(f_raw, active_trace_vel, cmd_f_limit)
-                            else:
-                                f_clamped = min(f_raw, cmd_f_limit)
+                            # Fallback: Murni fisika jika sensor anchor benar-benar kosong/hilang
+                            f_raw = (total_cluster_dist / cluster_dt) * 60.0
+                            f_clamped = min(f_raw, cmd_f_limit)
 
                     # --- SAFEGUARD: PHANTOM MOVEMENT (ILUSI KOORDINAT) ---
                     # Jika kecepatan trace nyaris nol (mesin diam) TAPI parser melihat
