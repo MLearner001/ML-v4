@@ -3,6 +3,7 @@ train_bi_lstm.py
 Tahap 4: Pelatihan Model Dual-Layer Bi-LSTM untuk Prediksi Profil Kecepatan CNC.
 """
 
+import keras
 import tensorflow as tf
 from tensorflow.keras import layers, models, callbacks, optimizers
 import numpy as np
@@ -186,16 +187,24 @@ def run_training(train_data, val_data,
         )
     else:
         # Mode Low RAM (generator)
-        history = model.fit(
-            x=train_data,
-            validation_data=val_data,
-            epochs=epochs,
-            initial_epoch=initial_epoch,
-            callbacks=training_callbacks,
-            verbose=1,
-            workers=8,
-            use_multiprocessing=True,
-            max_queue_size=20
-        )
+        fit_kwargs = {
+            "x": train_data,
+            "validation_data": val_data,
+            "epochs": epochs,
+            "initial_epoch": initial_epoch,
+            "callbacks": training_callbacks,
+            "verbose": 1
+        }
+
+        # Deteksi otomatis: Gunakan Multiprocessing eksplisit HANYA jika menggunakan Keras 2
+        if int(keras.__version__.split('.')[0]) < 3:
+            fit_kwargs["workers"] = 8
+            fit_kwargs["use_multiprocessing"] = True
+            fit_kwargs["max_queue_size"] = 20
+            print("\n[INFO] Keras 2 terdeteksi. Akselerasi Multiprocessing CPU (8 Workers) AKTIF!")
+        else:
+            print("\n[INFO] Keras 3 terdeteksi. Menggunakan sistem Data API bawaan.")
+
+        history = model.fit(**fit_kwargs)
 
     return model, history
