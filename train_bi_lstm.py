@@ -46,7 +46,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     # Optimizer AdamW
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4)
 
-    model.compile(optimizer=optimizer, loss=tf.keras.losses.Huber(delta=0.1), metrics=["mae", "mse"])
+    model.compile(optimizer=optimizer, loss=tf.keras.losses.Huber(delta=0.1), metrics=["mae", "mse"], jit_compile=True)
 
     return model
 
