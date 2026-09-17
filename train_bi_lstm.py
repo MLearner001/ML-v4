@@ -5,6 +5,7 @@ Tahap 4: Pelatihan Model Dual-Layer Bi-LSTM untuk Prediksi Profil Kecepatan CNC.
 
 import keras
 import tensorflow as tf
+import tensorflow.keras.backend as K
 from tensorflow.keras import layers, models, callbacks, optimizers
 import numpy as np
 from typing import Tuple

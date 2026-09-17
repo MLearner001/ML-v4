@@ -235,15 +235,25 @@ class SinuTrainSynchronizer:
                         # disembunyikan di subprogram dan mencampuradukkan fase G00 & G01.
                         f_clamped = cmd_f_limit
                     else:
-                        specific_key = get_sync_key(k)
-                        specific_trace_vel = trace_mean_vels.get(specific_key, 0)
-                        active_trace_vel = specific_trace_vel if specific_trace_vel > 0 else trace_vel
+                        # 1. Hitung Harmonik Feedrate Sejati (Fisika Murni: Jarak Total / Waktu Total)
+                        f_raw = (total_cluster_dist / cluster_dt) * 60.0
 
-                        if active_trace_vel > 0:
-                            f_clamped = min(active_trace_vel, cmd_f_limit)
-                        else:
-                            f_raw = (total_cluster_dist / cluster_dt) * 60.0
+                        if len(cluster_indices) > 1:
+                            # 2A. Jika ini KUMPULAN MICRO-BLOCKS (CYCLE832):
+                            # Kecepatan sesaat dari trace tidak valid untuk seluruh kurva.
+                            # Paksa gunakan Harmonik Feedrate murni!
                             f_clamped = min(f_raw, cmd_f_limit)
+                        else:
+                            # 2B. Jika ini BLOK TUNGGAL:
+                            specific_key = get_sync_key(k)
+                            specific_trace_vel = trace_mean_vels.get(specific_key, 0)
+                            active_trace_vel = specific_trace_vel if specific_trace_vel > 0 else trace_vel
+
+                            if active_trace_vel > 0:
+                                # Ambil yang paling masuk akal (terendah) antara Fisika vs Sensor
+                                f_clamped = min(f_raw, active_trace_vel, cmd_f_limit)
+                            else:
+                                f_clamped = min(f_raw, cmd_f_limit)
 
                     # --- SAFEGUARD: PHANTOM MOVEMENT (ILUSI KOORDINAT) ---
                     # Jika kecepatan trace nyaris nol (mesin diam) TAPI parser melihat
