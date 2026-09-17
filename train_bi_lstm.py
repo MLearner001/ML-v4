@@ -68,6 +68,18 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
         self.best_weights = None
 
     def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+
+        # --- MENCATAT LEARNING RATE KE LOG CSV ---
+        try:
+            lr_attr = 'learning_rate' if hasattr(self.model.optimizer, 'learning_rate') else 'lr'
+            lr_var = getattr(self.model.optimizer, lr_attr)
+            current_lr = float(lr_var.numpy()) if hasattr(lr_var, 'numpy') else float(K.get_value(lr_var))
+            logs['learning_rate'] = current_lr
+        except Exception:
+            pass
+        # -----------------------------------------
+
         current_val_loss = logs.get('val_loss')
         current_val_mae = logs.get('val_mae')
 
