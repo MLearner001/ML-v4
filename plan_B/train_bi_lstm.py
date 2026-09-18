@@ -8,6 +8,7 @@ import tensorflow as tf
 import tensorflow.keras.backend as K
 from tensorflow.keras import layers, models, callbacks, optimizers
 import numpy as np
+import pandas as pd
 from typing import Tuple
 
 import tensorflow.keras.backend as K
@@ -49,7 +50,8 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 import os
 
 class DualMonitorCallback(tf.keras.callbacks.Callback):
-    def __init__(self, factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6):
+    def __init__(self, factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6,
+                 best_val_loss=float('inf'), best_val_mae=float('inf')):
         super(DualMonitorCallback, self).__init__()
         self.factor = factor
         self.patience_lr = patience_lr
@@ -58,8 +60,8 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
 
         self.wait_lr = 0
         self.wait_stop = 0
-        self.best_val_loss = float('inf')
-        self.best_val_mae = float('inf')
+        self.best_val_loss = best_val_loss
+        self.best_val_mae = best_val_mae
         self.best_weights = None
 
     def on_epoch_end(self, epoch, logs=None):
@@ -169,9 +171,35 @@ def run_training(train_data, val_data,
         log_dir = "."
     csv_log_path = os.path.join(log_dir, "training_history_log.csv")
 
+    # Inisialisasi acuan default
+    prev_best_loss = float('inf')
+    prev_best_mae = float('inf')
+
+    # Ekstraksi nilai terbaik dari riwayat log jika ini adalah mode Resume
+    if initial_epoch > 0 and os.path.exists(csv_log_path):
+        try:
+            df_log = pd.read_csv(csv_log_path)
+            # Pastikan hanya membaca log sebelum epoch resume saat ini
+            if 'epoch' in df_log.columns:
+                df_valid_log = df_log[df_log['epoch'] < initial_epoch]
+            else:
+                df_valid_log = df_log
+
+            if not df_valid_log.empty:
+                prev_best_loss = float(df_valid_log['val_loss'].min())
+                prev_best_mae = float(df_valid_log['val_mae'].min())
+                print(f"\n[RESUME INFO] Menggunakan acuan terbaik dari log sebelumnya -> Best Val Loss: {prev_best_loss:.5f}, Best Val MAE: {prev_best_mae:.5f}")
+        except Exception as e:
+            print(f"\n[WARNING] Gagal mengekstrak acuan dari {csv_log_path}: {e}")
+
+    # Siapkan callback ModelCheckpoint dan suntikkan acuan best_val_loss
+    ckpt_callback = callbacks.ModelCheckpoint(model_save_path, monitor="val_loss", save_best_only=True, verbose=1)
+    ckpt_callback.best = prev_best_loss
+
     training_callbacks = [
-        callbacks.ModelCheckpoint(model_save_path, monitor="val_loss", save_best_only=True, verbose=1),
-        DualMonitorCallback(factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6),
+        ckpt_callback,
+        DualMonitorCallback(factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6,
+                            best_val_loss=prev_best_loss, best_val_mae=prev_best_mae),
         callbacks.CSVLogger(csv_log_path, separator=",", append=True)
     ]
 
