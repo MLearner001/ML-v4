@@ -19,7 +19,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 
     # 1. Jalur Utama (LSTM Navigator)
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=True, name="forward_BiLSTM_L1"))(inputs)
-    x = layers.SpatialDropout1D(0.2)(x)
+    x = layers.SpatialDropout1D(0.1)(x)
 
     # Layer 2 diubah ke return_sequences=True
     x = layers.Bidirectional(layers.LSTM(lstm_units, return_sequences=True, name="forward_BiLSTM_L2"))(x)
@@ -40,7 +40,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 
     # 4. Dense Regressor Head (Si Kalkulator)
     d = layers.Dense(128, activation="relu")(merged)
-    d = layers.Dropout(0.2)(d)
+    d = layers.Dropout(0.15)(d)
     d = layers.Dense(64, activation="relu")(d)
     outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output")(d)
 
