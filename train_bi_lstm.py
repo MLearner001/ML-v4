@@ -56,7 +56,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
 import os
 
 class DualMonitorCallback(tf.keras.callbacks.Callback):
-    def __init__(self, factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6,
+    def __init__(self, factor=0.5, patience_lr=5, patience_stop=15, min_lr=1e-6,
                  best_val_loss=float('inf'), best_val_mae=float('inf')):
         super(DualMonitorCallback, self).__init__()
         self.factor = factor
@@ -204,7 +204,7 @@ def run_training(train_data, val_data,
 
     training_callbacks = [
         ckpt_callback,
-        DualMonitorCallback(factor=0.5, patience_lr=3, patience_stop=10, min_lr=1e-6,
+        DualMonitorCallback(factor=0.5, patience_lr=5, patience_stop=15, min_lr=1e-6,
                             best_val_loss=prev_best_loss, best_val_mae=prev_best_mae),
         callbacks.CSVLogger(csv_log_path, separator=",", append=True)
     ]
