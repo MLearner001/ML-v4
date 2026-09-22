@@ -13,6 +13,16 @@ from typing import Tuple
 
 import tensorflow.keras.backend as K
 
+@tf.keras.utils.register_keras_serializable()
+def custom_braking_loss(y_true, y_pred):
+    """
+    Menghitung Mean Absolute Error (MAE), tetapi memberikan
+    denda 5x lipat lebih berat jika terjadi pada zona pengereman (y_true < 0.0).
+    """
+    error = tf.abs(y_true - y_pred)
+    penalty_multiplier = tf.where(y_true < 0.0, 5.0, 1.0)
+    return tf.reduce_mean(error * penalty_multiplier)
+
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 256) -> tf.keras.Model:
     """Membangun arsitektur Dual-Layer Bi-LSTM dengan Multi-Head Attention dan Dinamis Center Bypass."""
     inputs = layers.Input(shape=input_shape, name="NC_Sequence_Input")
@@ -42,8 +52,12 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output", dtype="float32")(d)
 
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_Plan_B")
-    optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4)
-    model.compile(optimizer=optimizer, loss=tf.keras.losses.MeanAbsolutePercentageError(), metrics=["mae", "mse"], jit_compile=True)
+
+    # Tambahkan clipnorm=1.0 pada optimizer
+    optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0)
+
+    # Ganti MAPE dengan custom_braking_loss
+    model.compile(optimizer=optimizer, loss=custom_braking_loss, metrics=["mae", "mse"], jit_compile=True)
 
     return model
 
