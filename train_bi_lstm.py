@@ -42,7 +42,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     d = layers.Dense(128, activation="relu")(merged)
     d = layers.Dropout(0.2)(d)
     d = layers.Dense(64, activation="relu")(d)
-    outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output")(d)
+    outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output", dtype="float32")(d)
 
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_V2")
 
