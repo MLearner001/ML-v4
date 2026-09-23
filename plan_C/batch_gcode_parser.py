@@ -652,14 +652,19 @@ class NCParser:
             df[delta_col] = df[tgt_col].diff().fillna(0.0)
             df = df.drop(columns=[tgt_col])
 
-    # 3. Tambahkan 'Spline_Curvature'
-    # Menggunakan turunan kedua dari Delta_X/Y/Z dengan rolling window 11 baris
-    if all(col in df.columns for col in ['Delta_X', 'Delta_Y', 'Delta_Z']):
+    # 4. Tambahkan 'Spline_Curvature' Terkondisi (Khusus G01)
+    # Menggunakan turunan kedua dari Delta_X/Y/Z dengan rolling window 11 baris,
+    # tetapi hanya diterapkan pada baris yang Is_G01 == 1.
+    if all(col in df.columns for col in ['Delta_X', 'Delta_Y', 'Delta_Z']) and 'Is_G01' in df.columns:
+        import numpy as np
         d2x = df['Delta_X'].diff().fillna(0.0)
         d2y = df['Delta_Y'].diff().fillna(0.0)
         d2z = df['Delta_Z'].diff().fillna(0.0)
         inst_curvature = np.sqrt(d2x**2 + d2y**2 + d2z**2)
-        df['Spline_Curvature'] = inst_curvature.rolling(window=11, center=True, min_periods=1).mean().fillna(0.0)
+        rolling_curvature = inst_curvature.rolling(window=11, center=True, min_periods=1).mean().fillna(0.0)
+
+        # Masking: hanya simpan nilai kelengkungan jika Is_G01 == 1, sisanya set 0.0
+        df['Spline_Curvature'] = np.where(df['Is_G01'] == 1, rolling_curvature, 0.0)
     else:
         df['Spline_Curvature'] = 0.0
 
