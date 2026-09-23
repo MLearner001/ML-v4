@@ -206,18 +206,24 @@ def run_training(train_data, val_data,
         except Exception as e:
             print(f"\n[WARNING] Gagal mengekstrak acuan dari {csv_log_path}: {e}")
 
-    # Siapkan callback ModelCheckpoint dan suntikkan acuan best_val_loss
+    # Siapkan callback ModelCheckpoint untuk val_loss (Eksisting)
     ckpt_callback = callbacks.ModelCheckpoint(model_save_path, monitor="val_loss", save_best_only=True, verbose=1)
     ckpt_callback.best = prev_best_loss
 
+    # BARU: Siapkan path dan callback khusus untuk val_mae terbaik
+    mae_save_path = model_save_path.replace(".keras", "_best_mae.keras")
+    ckpt_mae_callback = callbacks.ModelCheckpoint(mae_save_path, monitor="val_mae", mode="min", save_best_only=True, verbose=1)
+    ckpt_mae_callback.best = prev_best_mae
+
     training_callbacks = [
-        ckpt_callback,
+        ckpt_callback,         # Menyimpan best val_loss
+        ckpt_mae_callback,     # Menyimpan best val_mae
         DualMonitorCallback(factor=0.5, patience_lr=5, patience_stop=15, min_lr=1e-6,
                             best_val_loss=prev_best_loss, best_val_mae=prev_best_mae),
         callbacks.CSVLogger(csv_log_path, separator=",", append=True)
     ]
 
-    # Tambahkan autosave (overwrite) setiap epoch ke dalam folder jika diminta
+    # Tambahkan autosave (overwrite) setiap epoch ke dalam folder jika diminta (Eksisting)
     if checkpoint_dir:
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
