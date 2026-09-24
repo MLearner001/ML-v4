@@ -60,7 +60,7 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_Plan_B")
 
     # Tambahkan clipnorm=1.0 pada optimizer
-    optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0, clipvalue=0.5)
+    optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0)
 
     # Ganti MAPE dengan custom_braking_loss
     model.compile(optimizer=optimizer, loss=custom_braking_loss, metrics=["mae", "mse"], jit_compile=True)
