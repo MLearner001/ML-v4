@@ -222,33 +222,43 @@ class SinuTrainSynchronizer:
             total_cluster_dist = sum(cluster_dists)
 
             if total_cluster_dist > 1e-6:
-                # Menggunakan kecepatan rata-rata aktual dari trace (jika ada) sebagai target utama (prioritas 1)
-                anchor_key_used = get_sync_key(cluster_indices[-1])
-                trace_vel = trace_mean_vels.get(anchor_key_used, 0)
-
                 for k, d in zip(cluster_indices, cluster_dists):
-                    # Distribusi waktu murni berdasarkan proporsi jarak tanpa intervensi rumus t = d/v
-                    weight = d / total_cluster_dist
-                    t_sub = weight * cluster_dt
+                    row_k = df_gcode.iloc[k]
+                    is_mcall = row_k.get('Is_MCALL_Sub', 0) == 1
 
-                    # Syarat 4 (Phantom Block G01): Jika ada block G01 tapi tidak menghasilkan delta pergerakan, set Time Execution = 0.0
-                    if df_gcode.iloc[k]['Is_G01'] == 1 and d <= 1e-4:
-                        t_sub = 0.0
+                    if is_mcall:
+                        # KASUS KHUSUS MCALL: Trace SinuTrain 'buta' di dalam subprogram siklus bor.
+                        # Wajib di-override dengan hukum fisika absolut.
+                        if row_k.get('Theo_Duration', 0) > 0 and d <= 1e-4:
+                            t_sub = row_k['Theo_Duration'] # Dwell time (G04) di dasar lubang
+                        else:
+                            f_cmd = row_k['Cmd_F'] if row_k['Cmd_F'] > 0 else 20000.0
+                            t_sub = (d / f_cmd) * 60.0
+                    else:
+                        # Distribusi waktu murni berdasarkan proporsi jarak untuk blok normal
+                        weight = d / total_cluster_dist
+                        t_sub = weight * cluster_dt
+
+                        # Syarat 4 (Phantom Block G01): Jika G01 tapi tidak menghasilkan jarak, waktu = 0
+                        if row_k.get('Is_G01', 0) == 1 and d <= 1e-4:
+                            t_sub = 0.0
 
                     durations.append(t_sub)
-
             else:
                 # Gerakan diam murni (misal logika G54, tool change, dwell)
                 for k in cluster_indices:
-                    t_sub = cluster_dt / len(cluster_indices)
+                    row_k = df_gcode.iloc[k]
 
-                    # Syarat 3: Jika block tidak ada di trace dan tidak ada jarak
-                    if ticks == 0 and get_sync_key(k) not in trace_counts:
-                         t_sub = 0.0
+                    if row_k.get('Is_MCALL_Sub', 0) == 1 and row_k.get('Theo_Duration', 0) > 0:
+                        t_sub = row_k['Theo_Duration']
+                    else:
+                        t_sub = cluster_dt / len(cluster_indices)
+
+                        # Syarat 3: Jika block tidak ada di trace dan tidak ada jarak
+                        if ticks == 0 and get_sync_key(k) not in trace_counts:
+                             t_sub = 0.0
 
                     durations.append(t_sub)
-
-
 
             i = j  # Lompat ke blok setelah kluster diproses
 
