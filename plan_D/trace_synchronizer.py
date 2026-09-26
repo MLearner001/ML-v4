@@ -227,44 +227,9 @@ class SinuTrainSynchronizer:
                 trace_vel = trace_mean_vels.get(anchor_key_used, 0)
 
                 for k, d in zip(cluster_indices, cluster_dists):
-                    cmd_f_limit = df_gcode.iloc[k]['Cmd_F'] if df_gcode.iloc[k]['Cmd_F'] > 0 else 20000.0
-                    is_mcall = df_gcode.iloc[k].get('Is_MCALL_Sub', 0) == 1
-
-                    if is_mcall:
-                        # Khusus MCALL: Rata-rata trace SinuTrain tidak valid karena siklus
-                        # disembunyikan di subprogram dan mencampuradukkan fase G00 & G01.
-                        f_clamped = cmd_f_limit
-                    else:
-                        # LANGKAH 1: Ambil data aktual (sensor) dari block anchor (elemen terakhir dari cluster)
-                        anchor_key = get_sync_key(cluster_indices[-1])
-                        actual_sensor_vel = trace_mean_vels.get(anchor_key, 0)
-
-                        if actual_sensor_vel > 0:
-                            # LANGKAH 2 & 3: Copy kecepatan aktual anchor ke seluruh micro-blocks,
-                            # dijepit oleh command limit agar tidak melanggar batas G-Code.
-                            f_clamped = min(actual_sensor_vel, cmd_f_limit)
-                        else:
-                            # Fallback: Murni fisika jika sensor anchor benar-benar kosong/hilang
-                            f_raw = (total_cluster_dist / cluster_dt) * 60.0
-                            f_clamped = min(f_raw, cmd_f_limit)
-
-                    # --- SAFEGUARD: PHANTOM MOVEMENT (ILUSI KOORDINAT) ---
-                    # Jika kecepatan trace nyaris nol (mesin diam) TAPI parser melihat
-                    # jarak d yang besar, ini adalah pergeseran origin (misal paska CYCLE800).
-                    # Paksa f_clamped menjadi Pseudo-Feedrate (hingga batas command limit)
-                    # agar saat inference (t = d / f), waktu yang dihasilkan menjadi sangat kecil/aman.
-                    if f_clamped <= 1.0 and d > 1.0:
-                        f_pseudo = (d / max(cluster_dt, 0.004)) * 60.0
-                        f_clamped = min(f_pseudo, cmd_f_limit)
-                    # -----------------------------------------------------
-
+                    # Distribusi waktu murni berdasarkan proporsi jarak tanpa intervensi rumus t = d/v
                     weight = d / total_cluster_dist
                     t_sub = weight * cluster_dt
-
-                    if f_clamped > 0 and d > 1e-4:
-                        t_physical = (d / f_clamped) * 60.0
-                        # Jika MCALL, bypass interpolasi weight trace dan paksa gunakan durasi fisik nyata
-                        t_sub = t_physical if is_mcall else max(t_sub, t_physical)
 
                     # Syarat 4 (Phantom Block G01): Jika ada block G01 tapi tidak menghasilkan delta pergerakan, set Time Execution = 0.0
                     if df_gcode.iloc[k]['Is_G01'] == 1 and d <= 1e-4:
