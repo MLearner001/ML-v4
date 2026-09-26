@@ -97,7 +97,7 @@ def run_training_pipeline(train_dir: str, val_dir: str, out_dir: str, mem_mode: 
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
 
-    output_model = os.path.join(out_dir, "bilstm_feedrate_model.keras")
+    output_model = os.path.join(out_dir, "bilstm_time_model.keras")
     scaler_path = os.path.join(out_dir, "scaler.pkl")
 
     print(f"\n{'='*50}\n[MEMULAI BATCH TRAINING]\n{'='*50}")
@@ -177,7 +177,7 @@ def run_inference_pipeline(data_dir: str, out_dir: str):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
 
-    model_path = os.path.join(out_dir, "bilstm_feedrate_model.keras")
+    model_path = os.path.join(out_dir, "bilstm_time_model.keras")
     scaler_path = os.path.join(out_dir, "scaler.pkl")
 
     print(f"\n{'='*50}\n[TAHAP 5] Standalone Inference (Batch)\n{'='*50}")
@@ -251,7 +251,7 @@ if __name__ == "__main__":
             print("[ERROR] Pastikan argumen --data-dir adalah folder yang valid.")
             sys.exit(1)
 
-        model_path = os.path.join(args.out_dir, "bilstm_feedrate_model.keras")
+        model_path = os.path.join(args.out_dir, "bilstm_time_model.keras")
         scaler_path = os.path.join(args.out_dir, "scaler.pkl")
         if not os.path.exists(model_path) or not os.path.exists(scaler_path):
             print(f"[ERROR] Model atau Scaler tidak ditemukan di {args.out_dir}. Lakukan train terlebih dahulu.")
