@@ -13,20 +13,6 @@ from typing import Tuple
 
 import tensorflow.keras.backend as K
 
-@tf.keras.utils.register_keras_serializable()
-def custom_time_loss(y_true, y_pred):
-    """
-    Fungsi loss sederhana berbasis MAE yang kebal NaN
-    dioptimalkan untuk prediksi waktu eksekusi.
-    """
-    y_true_f32 = tf.cast(y_true, tf.float32)
-    y_pred_f32 = tf.cast(y_pred, tf.float32)
-
-    error = tf.abs(y_true_f32 - y_pred_f32)
-    error_safe = tf.clip_by_value(error, 0.0, 1000.0)
-
-    return tf.reduce_mean(error_safe)
-
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 256) -> tf.keras.Model:
     """Membangun arsitektur Dual-Layer Bi-LSTM dengan Multi-Head Attention dan Dinamis Center Bypass."""
     inputs = layers.Input(shape=input_shape, name="NC_Sequence_Input")
@@ -60,8 +46,11 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     # Tambahkan clipnorm=1.0 pada optimizer
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0)
 
-    # Ganti MAPE dengan custom_time_loss
-    model.compile(optimizer=optimizer, loss=custom_time_loss, metrics=["mae", "mse"], jit_compile=True)
+    # Gunakan Huber Loss dengan delta 0.08
+    huber_loss = tf.keras.losses.Huber(delta=0.08)
+
+    # Kompilasi model
+    model.compile(optimizer=optimizer, loss=huber_loss, metrics=["mae", "mse"], jit_compile=True)
 
     return model
 
