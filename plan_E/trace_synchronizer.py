@@ -117,6 +117,9 @@ class SinuTrainSynchronizer:
         trace_linenum = df_trace_valid['actLineNumber'].to_numpy()
 
         valid_trace_lines = np.unique(trace_linenum)
+        # Amankan pencarian batas dari blok bernilai nol atau negatif (yang bukan merupakan representasi N-Number lurus)
+        # Blok negatif di trace (seperti transisi CYCLE800) tetap akan masuk ke hitungan durasi karena kita
+        # mengambil jarak secara akumulatif, tetapi batas end_search_idx harus berlabuh pada block > 0
         valid_trace_lines = valid_trace_lines[valid_trace_lines > 0]
         valid_trace_lines.sort()
 
