@@ -100,10 +100,8 @@ class SinuTrainSynchronizer:
         """
         df_gcode = df_parsed_gcode.copy()
 
-        # Ekstrak data NumPy untuk performa
         trace_times = df_trace_valid['time'].to_numpy() if 'time' in df_trace_valid.columns else df_trace_valid.index.to_numpy() * self.dt
 
-        # Deteksi kolom X Y Z trace
         x_col = next((c for c in df_trace_valid.columns if 'f2' in c or 'X' in c), None)
         y_col = next((c for c in df_trace_valid.columns if 'f3' in c or 'Y' in c), None)
         z_col = next((c for c in df_trace_valid.columns if 'f4' in c or 'Z' in c), None)
@@ -113,12 +111,9 @@ class SinuTrainSynchronizer:
 
         trace_coords = df_trace_valid[[x_col, y_col, z_col]].to_numpy()
 
-        # Deteksi kecepatan
         vel_col = next((c for c in df_trace_valid.columns if 'f7' in c or 'V' in c), None)
         trace_velocs = df_trace_valid[vel_col].to_numpy() if vel_col else np.zeros(len(trace_coords))
 
-        # Deteksi Block Number (LineNum) dari SinuTrain
-        # Biasanya sudah di-rename jadi 'actLineNumber' dari proses sebelumnya
         trace_linenum = df_trace_valid['actLineNumber'].to_numpy()
 
         valid_trace_lines = np.unique(trace_linenum)
@@ -137,17 +132,6 @@ class SinuTrainSynchronizer:
         for ln in valid_trace_lines:
             line_end_indices[ln] = np.where(trace_linenum == ln)[0][-1]
 
-        # Kita butuh target Tgt_X, Y, Z. Karena di Batch GCode Parser Plan D sudah diganti jadi Delta,
-        # kita rekonstruksi Tgt XYZ secara kumulatif atau langsung ambil dari parser asli jika disediakan.
-        # Catatan: Prompt mengatakan "Gunakan kolom Tgt_X, Tgt_Y, dan Tgt_Z dari df_parsed_gcode sebagai target XYZ."
-        # Tapi Plan C/D sudah menghapusnya. Kita rekonstruksi on-the-fly.
-
-                # Inisialisasi posisi awal target menggunakan baris pertama trace (sebagai absolute anchor)
-        if len(trace_coords) > 0:
-            x_target, y_target, z_target = trace_coords[0][0], trace_coords[0][1], trace_coords[0][2]
-        else:
-            x_target, y_target, z_target = 0.0, 0.0, 0.0
-
         durations = []
         feedrates = []
         last_actual_idx = 0
@@ -155,14 +139,8 @@ class SinuTrainSynchronizer:
         for idx, row in df_gcode.iterrows():
             block_id = int(row['N_Number'])
 
-            # Jika ada Tgt_X gunakan itu, jika tidak gunakan kumulatif Delta
-            if 'Tgt_X' in row:
-                target_xyz = np.array([row['Tgt_X'], row['Tgt_Y'], row['Tgt_Z']])
-            else:
-                x_target += row.get('Delta_X', 0.0)
-                y_target += row.get('Delta_Y', 0.0)
-                z_target += row.get('Delta_Z', 0.0)
-                target_xyz = np.array([x_target, y_target, z_target])
+            # Ambil Titik Koordinat dari Parser Asli (Tgt_X, Tgt_Y, Tgt_Z)
+            target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
 
             # --- Spatial-Locked Search Window ---
             ref_block = get_next_valid_line(block_id)

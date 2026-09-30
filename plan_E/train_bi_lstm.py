@@ -18,29 +18,16 @@ def custom_braking_huber_loss(y_true, y_pred):
     y_true_f32 = tf.cast(y_true, tf.float32)
     y_pred_f32 = tf.cast(y_pred, tf.float32)
 
-    # Hitung error
     error = tf.abs(y_true_f32 - y_pred_f32)
-
-    # Threshold Huber Loss (delta = 0.1)
     delta = 0.1
-
-    # Hitung komponen MSE (error <= delta)
     mse_loss = 0.5 * tf.square(error)
-
-    # Hitung komponen MAE linear (error > delta)
     mae_loss = delta * error - 0.5 * tf.square(delta)
 
-    # Terapkan Huber
     huber_base = tf.where(error <= delta, mse_loss, mae_loss)
-
-    # Terapkan penalty 5x jika Z-Score memprediksi deselerasi tajam (y_true < 0.0)
     penalty_multiplier = tf.where(y_true_f32 < 0.0, 5.0, 1.0)
 
     return tf.reduce_mean(huber_base * penalty_multiplier)
 
-
-
-import tensorflow.keras.backend as K
 
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 256) -> tf.keras.Model:
     """Membangun arsitektur Dual-Layer Bi-LSTM dengan Multi-Head Attention dan Dinamis Center Bypass."""
@@ -68,14 +55,14 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     d = layers.Dense(256, activation="relu")(merged)
     d = layers.Dropout(0.2)(d)
     d = layers.Dense(64, activation="relu")(d)
-    outputs = layers.Dense(1, activation="linear", name="Predicted_Time_Output", dtype="float32")(d)
+    outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output", dtype="float32")(d)
 
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_Plan_B")
 
     # Tambahkan clipnorm=1.0 pada optimizer
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0)
 
-    # Kompilasi model dengan custom Penalized Huber Loss
+    # Ganti MAPE dengan custom_braking_loss
     model.compile(optimizer=optimizer, loss=custom_braking_huber_loss, metrics=["mae", "mse"], jit_compile=True)
 
     return model
@@ -177,7 +164,7 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
 
 def run_training(train_data, val_data,
                  input_shape: Tuple[int, int],
-                 model_save_path: str = "bilstm_time_model.keras",
+                 model_save_path: str = "bilstm_feedrate_model.keras",
                  checkpoint_dir: str = None,
                  resume_model_path: str = None,
                  learning_rate: float = 1e-3,

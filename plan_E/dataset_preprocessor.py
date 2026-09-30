@@ -24,7 +24,7 @@ class DatasetPreprocessor:
             'Is_Cycle800', 'Is_MCALL_Sub', 'C832_Tol', 'C832_Mode',
             'Delta_X', 'Delta_Y', 'Delta_Z', 'Spline_Curvature',
             'Delta_3D', 'Delta_Rot', 'Tool_Vector_Delta', 'Kinematic_Blend_Ratio', 'Rotary_Velocity_Demand', 'Sharpness_Angle',
-            'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Turn_Count', 'Is_Partial_Arc', 'Is_Z_Plunge',
+            'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Theo_Duration', 'Turn_Count', 'Is_Partial_Arc', 'Is_Z_Plunge',
             'Kinematic_Speed_Limit', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3'
         ]
 
@@ -45,13 +45,16 @@ class DatasetPreprocessor:
         df_out['Cmd_F'] = np.log1p(np.maximum(0.0, df_out['Cmd_F'].values))
         df_out['Sharpness_Angle'] = df_out['Sharpness_Angle'].values / np.pi
 
+        # Log kompresi untuk Theo_Duration karena rentangnya bisa bervariasi dari ms hingga menit
+        if 'Theo_Duration' in df_out.columns:
+            df_out['Theo_Duration'] = np.log1p(np.maximum(0.0, df_out['Theo_Duration'].values))
 
         # Log kompresi untuk blend ratio karena bisa meledak saat translasi = 0
         if 'Kinematic_Blend_Ratio' in df_out.columns:
             df_out['Kinematic_Blend_Ratio'] = np.log1p(np.maximum(0.0, df_out['Kinematic_Blend_Ratio'].values))
 
-        if is_training and 'Time_Execution_s' in df_out.columns:
-            df_out['Time_Execution_s'] = np.log1p(np.maximum(0.0, df_out['Time_Execution_s'].values))
+        if is_training and 'Target_Feedrate' in df_out.columns:
+            df_out['Target_Feedrate'] = np.log1p(np.maximum(0.0, df_out['Target_Feedrate'].values))
 
         return df_out
 
@@ -60,7 +63,7 @@ class DatasetPreprocessor:
         # Menggunakan loop parsial atau concat (concat masih aman untuk memori 2D)
         combined_df = pd.concat([self._apply_log_transforms(df, is_training=True) for df in df_list], axis=0)
         self.feature_scaler.fit(combined_df[self.feature_cols])
-        self.target_scaler.fit(combined_df[['Time_Execution_s']])
+        self.target_scaler.fit(combined_df[['Target_Feedrate']])
 
     def fit_transform_dataset(self, df_list: List[pd.DataFrame], is_resume: bool = False) -> Tuple[np.ndarray, np.ndarray]:
         """Fit scaler pada kumpulan data training dan kembalikan tensor (X, Y). (Mode High-RAM)"""
@@ -108,6 +111,9 @@ class DatasetPreprocessor:
             standstill_df['Kinematic_Blend_Ratio'] = 0.0
         if 'Rotary_Velocity_Demand' in standstill_df.columns:
             standstill_df['Rotary_Velocity_Demand'] = 0.0
+        if 'Theo_Duration' in standstill_df.columns:
+            # Durasi diam = 0
+            standstill_df['Theo_Duration'] = 0.0
         if 'Turn_Count' in standstill_df.columns:
             standstill_df['Turn_Count'] = 0.0
         if 'Is_Partial_Arc' in standstill_df.columns:
@@ -119,8 +125,8 @@ class DatasetPreprocessor:
         for col in ['Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3']:
             if col in standstill_df.columns:
                 standstill_df[col] = 0.0
-        if 'Time_Execution_s' in standstill_df.columns:
-            standstill_df['Time_Execution_s'] = 0.0
+        if 'Target_Feedrate' in standstill_df.columns:
+            standstill_df['Target_Feedrate'] = 0.0
 
         scaled_standstill = self.feature_scaler.transform(standstill_df[self.feature_cols])
 
@@ -138,7 +144,7 @@ class DatasetPreprocessor:
             np.repeat(scaled_standstill, self.half_w, axis=0)
         ])
 
-        scaled_target = self.target_scaler.transform(df_prep[['Time_Execution_s']]).astype(np.float32) if 'Time_Execution_s' in df_prep.columns else None
+        scaled_target = self.target_scaler.transform(df_prep[['Target_Feedrate']]).astype(np.float32) if 'Target_Feedrate' in df_prep.columns else None
 
         return padded_features, scaled_target
 
