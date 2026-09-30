@@ -9,23 +9,38 @@ import tensorflow.keras.backend as K
 from tensorflow.keras import layers, models, callbacks, optimizers
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from typing import Tuple
 
-import tensorflow.keras.backend as K
-
 @tf.keras.utils.register_keras_serializable()
-def custom_time_loss(y_true, y_pred):
-    """
-    Fungsi loss sederhana berbasis MAE yang kebal NaN
-    dioptimalkan untuk prediksi waktu eksekusi.
-    """
+def custom_braking_huber_loss(y_true, y_pred):
+    # Proteksi tipe data terhadap mixed_float16
     y_true_f32 = tf.cast(y_true, tf.float32)
     y_pred_f32 = tf.cast(y_pred, tf.float32)
 
+    # Hitung error
     error = tf.abs(y_true_f32 - y_pred_f32)
-    error_safe = tf.clip_by_value(error, 0.0, 1000.0)
 
-    return tf.reduce_mean(error_safe)
+    # Threshold Huber Loss (delta = 0.1)
+    delta = 0.1
+
+    # Hitung komponen MSE (error <= delta)
+    mse_loss = 0.5 * tf.square(error)
+
+    # Hitung komponen MAE linear (error > delta)
+    mae_loss = delta * error - 0.5 * tf.square(delta)
+
+    # Terapkan Huber
+    huber_base = tf.where(error <= delta, mse_loss, mae_loss)
+
+    # Terapkan penalty 5x jika Z-Score memprediksi deselerasi tajam (y_true < 0.0)
+    penalty_multiplier = tf.where(y_true_f32 < 0.0, 5.0, 1.0)
+
+    return tf.reduce_mean(huber_base * penalty_multiplier)
+
+
+
+import tensorflow.keras.backend as K
 
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 256) -> tf.keras.Model:
     """Membangun arsitektur Dual-Layer Bi-LSTM dengan Multi-Head Attention dan Dinamis Center Bypass."""
@@ -60,8 +75,8 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     # Tambahkan clipnorm=1.0 pada optimizer
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0)
 
-    # Ganti MAPE dengan custom_time_loss
-    model.compile(optimizer=optimizer, loss=custom_time_loss, metrics=["mae", "mse"], jit_compile=True)
+    # Kompilasi model dengan custom Penalized Huber Loss
+    model.compile(optimizer=optimizer, loss=custom_braking_huber_loss, metrics=["mae", "mse"], jit_compile=True)
 
     return model
 
