@@ -19,12 +19,15 @@ def custom_braking_huber_loss(y_true, y_pred):
     y_pred_f32 = tf.cast(y_pred, tf.float32)
 
     error = tf.abs(y_true_f32 - y_pred_f32)
-    delta = 0.1
-    mse_loss = 0.5 * tf.square(error)
-    mae_loss = delta * error - 0.5 * tf.square(delta)
+    # Gunakan clip_by_value pada error untuk menahan ledakan kuadrat sebelum dimasukkan ke tf.square
+    error_safe = tf.clip_by_value(error, 0.0, 1000.0)
 
-    huber_base = tf.where(error <= delta, mse_loss, mae_loss)
-    penalty_multiplier = tf.where(y_true_f32 < 0.0, 5.0, 1.0)
+    delta = tf.constant(0.1, dtype=tf.float32)
+    mse_loss = 0.5 * tf.square(error_safe)
+    mae_loss = delta * error_safe - 0.5 * tf.square(delta)
+
+    huber_base = tf.where(error_safe <= delta, mse_loss, mae_loss)
+    penalty_multiplier = tf.where(y_true_f32 < 0.0, tf.constant(5.0, dtype=tf.float32), tf.constant(1.0, dtype=tf.float32))
 
     return tf.reduce_mean(huber_base * penalty_multiplier)
 

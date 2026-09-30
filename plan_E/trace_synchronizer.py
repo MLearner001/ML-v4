@@ -135,9 +135,17 @@ class SinuTrainSynchronizer:
         durations = []
         feedrates = []
         last_actual_idx = 0
+        last_valid_block_id = 1
 
         for idx, row in df_gcode.iterrows():
             block_id = int(row['N_Number'])
+
+            # Forward-fill N_Number untuk menangani blok yang tidak memiliki nomor (contoh: N_Number = -1)
+            # Ini mencegah pencarian mundur (rewind) pada algoritma pencarian jendela spasial
+            if block_id > 0:
+                last_valid_block_id = block_id
+            else:
+                block_id = last_valid_block_id
 
             # Ambil Titik Koordinat dari Parser Asli (Tgt_X, Tgt_Y, Tgt_Z)
             target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
