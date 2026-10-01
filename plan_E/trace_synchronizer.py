@@ -142,46 +142,59 @@ class SinuTrainSynchronizer:
 
         for idx, row in df_gcode.iterrows():
             block_id = int(row['N_Number'])
+            is_motion = int(row.get('Is_Motion_Block', 0))
 
-            # Forward-fill N_Number untuk menangani blok yang tidak memiliki nomor (contoh: N_Number = -1)
-            # Ini mencegah pencarian mundur (rewind) pada algoritma pencarian jendela spasial
+            # Forward-fill N_Number untuk menangani blok yang tidak memiliki nomor
             if block_id > 0:
                 last_valid_block_id = block_id
             else:
                 block_id = last_valid_block_id
 
-            # Ambil Titik Koordinat dari Parser Asli (Tgt_X, Tgt_Y, Tgt_Z)
-            target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
+            if is_motion == 0:
+                # BYPASS: Mesin diam (Setup awal, G04 Dwell, atau M-Code).
+                # Jangan lakukan pencarian spasial agar indeks trace tidak lompat liar.
+                actual_idx = last_actual_idx
 
-            # --- Spatial-Locked Search Window ---
-            ref_block = get_next_valid_line(block_id)
-            end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
-            end_search_idx = min(end_bound_idx + 10, len(trace_coords))
-            start_search_idx = min(last_actual_idx, end_search_idx)
+                # Gunakan Dwell Time aktual dari G04 jika ada, jika tidak 0.0
+                durasi_trace = float(row.get('G04_Dwell_Time', 0.0))
+                mean_feedrate = 0.0
 
-            search_window = trace_coords[start_search_idx:end_search_idx]
-
-            # Cari Jarak Terdekat (Euclidean)
-            if len(search_window) == 0:
-                actual_idx = start_search_idx
-                actual_safe_idx = min(actual_idx, len(trace_coords)-1)
             else:
-                distances = np.linalg.norm(search_window - target_xyz, axis=1)
-                min_local_idx = np.argmin(distances)
-                actual_idx = start_search_idx + min_local_idx
+                # LAKUKAN PENCARIAN SPASIAL HANYA UNTUK BLOK PERGERAKAN
+                target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
 
-            # Hitung Durasi Aktual & Mean Feedrate
-            durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
+                ref_block = get_next_valid_line(block_id)
+                end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
 
-            if actual_idx > last_actual_idx:
-                v_slice = trace_velocs[last_actual_idx:actual_idx]
-                mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
-            else:
-                safe_idx = min(actual_idx, len(trace_velocs)-1)
-                mean_feedrate = trace_velocs[safe_idx]
+                # PROTEKSI WAKTU MINUS: end_search_idx tidak boleh lebih kecil dari last_actual_idx
+                end_search_idx = max(last_actual_idx + 1, min(end_bound_idx + 10, len(trace_coords)))
+
+                # PROTEKSI WAKTU MINUS: start_search_idx mutlak sama dengan last_actual_idx (pantang mundur)
+                start_search_idx = last_actual_idx
+
+                search_window = trace_coords[start_search_idx:end_search_idx]
+
+                # Cari Jarak Terdekat (Euclidean)
+                if len(search_window) == 0:
+                    actual_idx = start_search_idx
+                else:
+                    distances = np.linalg.norm(search_window - target_xyz, axis=1)
+                    min_local_idx = np.argmin(distances)
+                    actual_idx = start_search_idx + min_local_idx
+
+                # Hitung Durasi Aktual & Mean Feedrate
+                durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
+
+                if actual_idx > last_actual_idx:
+                    v_slice = trace_velocs[last_actual_idx:actual_idx]
+                    mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
+                else:
+                    safe_idx = min(actual_idx, len(trace_velocs)-1)
+                    mean_feedrate = trace_velocs[safe_idx]
 
             durations.append(durasi_trace)
             feedrates.append(mean_feedrate)
+            last_actual_idx = actual_idx
 
             last_actual_idx = actual_idx
 
