@@ -353,10 +353,6 @@ class NCParser:
           # [Fase 2 Update] Theoretical Duration (Seconds)
           # Asumsi minimal velocity 1.0 mm/min untuk menghindari div by zero
           safe_f = max(1.0, effective_f)
-          if mode == "G04":
-              theo_duration = explicit_time
-          else:
-              theo_duration = (delta_3d / safe_f) * 60.0
 
           parsed_rows.append({
               "Block_ID": sub_id,
@@ -560,20 +556,9 @@ class NCParser:
 
       # [Fase 2 Update] Theoretical Duration (Seconds)
       safe_f = max(1.0, effective_limit_f)
-      # Jika hanya rotasi tanpa translasi, kita menggunakan estimasi kecepatan rotasi B/C maksimal (misal 5000 derajat/menit)
-      if delta_3d < 1e-4 and delta_rot > 1e-4:
-          theo_duration = (delta_rot / 5000.0) * 60.0
-      else:
-          theo_duration = (delta_3d / safe_f) * 60.0
 
       # --- TAMBAHAN KHUSUS G04 (DWELL TIME) ---
-      if re.search(r"\bG0*4\b", line, re.IGNORECASE):
-          # Siemens bisa menggunakan F, X, atau S untuk parameter jeda waktu
-          dwell_match = re.search(r"\b[FXS]\s*=\s*([^\s,]+)|\b[FXS]([0-9\.]+)", line, re.IGNORECASE)
-          if dwell_match:
-              dwell_val_str = dwell_match.group(1) if dwell_match.group(1) else dwell_match.group(2)
-              theo_duration = self._evaluate_r_param(dwell_val_str)
-      # ----------------------------------------
+
 
       parsed_rows.append({
           "Block_ID": str(block_id),

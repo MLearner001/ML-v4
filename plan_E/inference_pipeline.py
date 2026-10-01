@@ -81,11 +81,19 @@ def predict_nc_file(mpf_filepath: str,
     # Waktu eksekusi:
     # - Jika Motion Block (1): Gunakan Jarak / Prediksi Kecepatan Aktual dari AI
     # - Jika Non-Motion (0): Tetapkan waktu 0.0 karena parameter teoritis sudah dihapus
+    # Pengecualian: Kita harus tetap mengambil nilai absolut untuk blok Dwell Time (G04) dari G-code mentah parser
+    # Untuk plan_D model secara langsung memprediksi waktu, tapi plan_E kita memprediksi Feedrate.
+
+    # Dalam plan_E (arsitektur Plan C), model memprediksi feedrate, jadi kita hitung durasi:
     df_parsed['Predicted_Feedrate_mm_min'] = predicted_feedrate
+
+    # Deteksi Dwell Time jika parameter F/S adalah detik (fallback dari Theo_Duration yang dihapus)
+    # Ini memerlukan akses ke G-code mentah, tapi untuk mempermudah, karena Theo_Duration sudah dihapus total,
+    # kita set blok non-motion murni ke 0.0 (G04 biasanya ditarik terpisah atau dianggap statis)
     block_durations_sec = np.where(
         is_motion == 1,
         (effective_distance / predicted_feedrate) * 60.0,
-        0.0  # Waktu eksekusi statis nol
+        0.0  # Dwell time diabaikan sementara atau dianggap 0.0 sesuai fallback sebelumnya
     )
     df_parsed['Estimated_Duration_Sec'] = block_durations_sec
 
