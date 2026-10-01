@@ -142,60 +142,52 @@ class SinuTrainSynchronizer:
 
         for idx, row in df_gcode.iterrows():
             block_id = int(row['N_Number'])
-            is_motion = int(row.get('Is_Motion_Block', 0))
 
-            # Forward-fill N_Number untuk menangani blok yang tidak memiliki nomor
+            # 1. Forward-fill N_Number untuk menangani blok MCALL/turunan yang tidak bernomor
             if block_id > 0:
                 last_valid_block_id = block_id
             else:
                 block_id = last_valid_block_id
 
-            if is_motion == 0:
-                # BYPASS: Mesin diam (Setup awal, G04 Dwell, atau M-Code).
-                # Jangan lakukan pencarian spasial agar indeks trace tidak lompat liar.
-                actual_idx = last_actual_idx
+            # 2. Ambil Target Koordinat Absolut dari Parser
+            target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
 
-                # Gunakan Dwell Time aktual dari G04 jika ada, jika tidak 0.0
-                durasi_trace = float(row.get('G04_Dwell_Time', 0.0))
-                mean_feedrate = 0.0
+            # 3. BATASAN SINYAL BLOK (The "new_sync" Logic)
+            ref_block = get_next_valid_line(block_id)
+            end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
+            end_search_idx = min(end_bound_idx + 10, len(trace_coords))
 
+            # 4. KUNCI PROGRESIF: start_search_idx tidak boleh mundur dari last_actual_idx
+            start_search_idx = min(last_actual_idx, end_search_idx)
+
+            # Jika end_search_idx lebih kecil atau sama dengan start_search_idx (mesin diam di blok yang sama),
+            # paksa end_search_idx minimal sama dengan start_search_idx agar tidak error.
+            if end_search_idx <= start_search_idx:
+                 end_search_idx = start_search_idx + 1
+
+            search_window = trace_coords[start_search_idx:end_search_idx]
+
+            # 5. PENCARIAN SPASIAL
+            if len(search_window) == 0:
+                actual_idx = start_search_idx
             else:
-                # LAKUKAN PENCARIAN SPASIAL HANYA UNTUK BLOK PERGERAKAN
-                target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
+                distances = np.linalg.norm(search_window - target_xyz, axis=1)
+                min_local_idx = np.argmin(distances)
+                actual_idx = start_search_idx + min_local_idx
 
-                ref_block = get_next_valid_line(block_id)
-                end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
+            # 6. KALKULASI WAKTU & FEEDRATE
+            durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
 
-                # PROTEKSI WAKTU MINUS: end_search_idx tidak boleh lebih kecil dari last_actual_idx
-                end_search_idx = max(last_actual_idx + 1, min(end_bound_idx + 10, len(trace_coords)))
-
-                # PROTEKSI WAKTU MINUS: start_search_idx mutlak sama dengan last_actual_idx (pantang mundur)
-                start_search_idx = last_actual_idx
-
-                search_window = trace_coords[start_search_idx:end_search_idx]
-
-                # Cari Jarak Terdekat (Euclidean)
-                if len(search_window) == 0:
-                    actual_idx = start_search_idx
-                else:
-                    distances = np.linalg.norm(search_window - target_xyz, axis=1)
-                    min_local_idx = np.argmin(distances)
-                    actual_idx = start_search_idx + min_local_idx
-
-                # Hitung Durasi Aktual & Mean Feedrate
-                durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
-
-                if actual_idx > last_actual_idx:
-                    v_slice = trace_velocs[last_actual_idx:actual_idx]
-                    mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
-                else:
-                    safe_idx = min(actual_idx, len(trace_velocs)-1)
-                    mean_feedrate = trace_velocs[safe_idx]
+            if actual_idx > last_actual_idx:
+                v_slice = trace_velocs[last_actual_idx:actual_idx]
+                # Hitung mean murni seperti new_sync_2.py
+                mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
+            else:
+                safe_idx = min(actual_idx, len(trace_velocs)-1)
+                mean_feedrate = trace_velocs[safe_idx]
 
             durations.append(durasi_trace)
             feedrates.append(mean_feedrate)
-            last_actual_idx = actual_idx
-
             last_actual_idx = actual_idx
 
         # 4. Kalkulasi Estimasi Durasi Teoritis (s) (Hanya untuk informasi, bukan untuk AI)
