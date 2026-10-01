@@ -95,12 +95,14 @@ class SinuTrainSynchronizer:
 
     def match_and_calculate_targets(self, df_parsed_gcode: pd.DataFrame, df_trace_valid: pd.DataFrame) -> pd.DataFrame:
         """
-        Algoritma Hibrida (Spatial-Locked Mapping):
-        Mencari posisi XYZ terdekat di Trace SinuTrain berdasarkan Search Window N_Number G-Code.
+        Algoritma Hibrida (Spasial + Batasan Sinyal Blok).
+        Mencari posisi XYZ terdekat di Trace SinuTrain berdasarkan interval waktu
+        dari Sinyal Blok (actLineNumber).
         """
         df_gcode = df_parsed_gcode.copy()
 
-        trace_times = df_trace_valid['time'].to_numpy() if 'time' in df_trace_valid.columns else df_trace_valid.index.to_numpy() * self.dt
+        dt = self.dt
+        trace_times = df_trace_valid['time'].to_numpy() if 'time' in df_trace_valid.columns else df_trace_valid.index.to_numpy() * dt
 
         x_col = next((c for c in df_trace_valid.columns if 'f2' in c or 'X' in c), None)
         y_col = next((c for c in df_trace_valid.columns if 'f3' in c or 'Y' in c), None)
@@ -117,9 +119,6 @@ class SinuTrainSynchronizer:
         trace_linenum = df_trace_valid['actLineNumber'].to_numpy()
 
         valid_trace_lines = np.unique(trace_linenum)
-        # Amankan pencarian batas dari blok bernilai nol atau negatif (yang bukan merupakan representasi N-Number lurus)
-        # Blok negatif di trace (seperti transisi CYCLE800) tetap akan masuk ke hitungan durasi karena kita
-        # mengambil jarak secara akumulatif, tetapi batas end_search_idx harus berlabuh pada block > 0
         valid_trace_lines = valid_trace_lines[valid_trace_lines > 0]
         valid_trace_lines.sort()
 
@@ -143,31 +142,36 @@ class SinuTrainSynchronizer:
         for idx, row in df_gcode.iterrows():
             block_id = int(row['N_Number'])
 
-            # 1. Forward-fill N_Number untuk menangani blok MCALL/turunan yang tidak bernomor
             if block_id > 0:
                 last_valid_block_id = block_id
             else:
                 block_id = last_valid_block_id
 
-            # 2. Ambil Target Koordinat Absolut dari Parser
             target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
+            d_3d = float(row.get('Delta_3D', 0.0))
+            d_rot = float(row.get('Delta_Rot', 0.0))
+            cmd_f_limit = float(row.get('Cmd_F', 20000.0))
+            if cmd_f_limit <= 0.0:
+                cmd_f_limit = 20000.0
 
-            # 3. BATASAN SINYAL BLOK (The "new_sync" Logic)
+            # --- Sinyal Blok sebagai Pagar Batas ---
             ref_block = get_next_valid_line(block_id)
             end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
+            # Mencegah end_bound_idx lebih kecil dari last_actual_idx
+            if end_bound_idx < last_actual_idx:
+                 end_bound_idx = last_actual_idx
+
             end_search_idx = min(end_bound_idx + 10, len(trace_coords))
 
-            # 4. KUNCI PROGRESIF: start_search_idx tidak boleh mundur dari last_actual_idx
-            start_search_idx = min(last_actual_idx, end_search_idx)
+            # Kunci Progresif: pencarian dimulai dari last_actual_idx
+            start_search_idx = last_actual_idx
 
-            # Jika end_search_idx lebih kecil atau sama dengan start_search_idx (mesin diam di blok yang sama),
-            # paksa end_search_idx minimal sama dengan start_search_idx agar tidak error.
             if end_search_idx <= start_search_idx:
                  end_search_idx = start_search_idx + 1
 
             search_window = trace_coords[start_search_idx:end_search_idx]
 
-            # 5. PENCARIAN SPASIAL
+            # Pencarian Spasial di dalam Pagar
             if len(search_window) == 0:
                 actual_idx = start_search_idx
             else:
@@ -175,36 +179,53 @@ class SinuTrainSynchronizer:
                 min_local_idx = np.argmin(distances)
                 actual_idx = start_search_idx + min_local_idx
 
-            # 6. KALKULASI WAKTU & FEEDRATE
-            durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
+            # Hitung tick (selisih indeks)
+            ticks = actual_idx - last_actual_idx
 
-            if actual_idx > last_actual_idx:
-                v_slice = trace_velocs[last_actual_idx:actual_idx]
-                # Hitung mean murni seperti new_sync_2.py
-                mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
+            # --- PROTEKSI KASUS B (Penggabungan Blok Rapid) ---
+            if d_3d > 1.0 and ticks <= 2:
+                # Terlalu sedikit tick untuk jarak besar, ini anomali / tidak ada eksekusi nyata
+                f_raw = cmd_f_limit
             else:
-                safe_idx = min(actual_idx, len(trace_velocs)-1)
-                mean_feedrate = trace_velocs[safe_idx]
+                if ticks > 0:
+                    v_slice = trace_velocs[last_actual_idx:actual_idx]
+                    f_raw = float(np.mean(v_slice))
+                else:
+                    safe_idx = min(actual_idx, len(trace_velocs)-1)
+                    f_raw = float(trace_velocs[safe_idx])
 
-            durations.append(durasi_trace)
-            feedrates.append(mean_feedrate)
+            t_sub = float(max(ticks * dt, dt))
+
+            # --- PHYSICAL GUARD CLAMPING & PROTEKSI DURASI ---
+            if d_3d < 1e-4 and d_rot < 1e-4:
+                # Blok non-motion, tetapkan durasi dan feedrate absolut tanpa mendistorsi spasial berikutnya
+                f_clamped = cmd_f_limit
+                t_sub = float(max(ticks * dt, dt))
+            else:
+                f_clamped = min(f_raw, cmd_f_limit, 20000.0)
+                if f_clamped < 1e-4:
+                    f_clamped = min(cmd_f_limit, 20000.0)
+                # Proteksi Durasi minimal berdasarkan jarak
+                kinematic_t = (d_3d / f_clamped) * 60.0
+                t_sub = float(max(t_sub, kinematic_t))
+
+            # Pengaman Ekstra absolut agar durasi tidak pernah di bawah dt
+            if t_sub < dt:
+                t_sub = dt
+
+            durations.append(t_sub)
+            feedrates.append(f_clamped)
             last_actual_idx = actual_idx
 
-        # 4. Kalkulasi Estimasi Durasi Teoritis (s) (Hanya untuk informasi, bukan untuk AI)
-        # Jarak 3D dibagi dengan Target_Feedrate (rata-rata aktual). Kita ubah menit ke detik.
-        # Jika feedrate == 0, durasi dipaksa menjadi 0.0
-        jarak_3d = df_gcode['Delta_3D'].values
-        feedrates_arr = np.array(feedrates)
-
-        estimasi_durasi_teoritis = np.where(
-            feedrates_arr > 0.0,
-            (jarak_3d / np.maximum(feedrates_arr, 1e-6)) * 60.0,
-            0.0
-        )
-
-        # Simpan
         df_gcode['Duration_Sec'] = durations
         df_gcode['Target_Feedrate'] = feedrates
+
+        feedrates_arr = np.array(feedrates)
+        estimasi_durasi_teoritis = np.where(
+            feedrates_arr > 0.0,
+            (df_gcode['Delta_3D'].values / np.maximum(feedrates_arr, 1e-6)) * 60.0,
+            0.0
+        )
         df_gcode['Estimasi_Durasi_Teoritis_s'] = estimasi_durasi_teoritis
 
         return df_gcode
