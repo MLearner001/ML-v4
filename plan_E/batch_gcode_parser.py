@@ -386,6 +386,7 @@ class NCParser:
               "Tgt_X": sub_x,
               "Tgt_Y": sub_y,
               "Tgt_Z": sub_z,
+              "G04_Dwell_Time": dwell_time,
               "Tgt_B": tgt_b,
               "Tgt_C": tgt_c,
               "Delta_3D": delta_3d,
@@ -409,7 +410,6 @@ class NCParser:
               "Is_Reversal_Z": (
                   1 if (dz * self.state.prev_dz < 0 and abs(dz) > 1e-4) else 0
               ),
-              "Theo_Duration": theo_duration,
           })
 
           # Update state
@@ -604,6 +604,7 @@ class NCParser:
           "Tgt_X": tgt_x,
           "Tgt_Y": tgt_y,
           "Tgt_Z": tgt_z,
+          "G04_Dwell_Time": dwell_time,
           "Tgt_B": tgt_b,
           "Tgt_C": tgt_c,
           "Delta_3D": delta_3d,
@@ -621,7 +622,6 @@ class NCParser:
           "Is_Reversal_X": is_reversal_x,
           "Is_Reversal_Y": is_reversal_y,
           "Is_Reversal_Z": is_reversal_z,
-          "Theo_Duration": theo_duration,
       })
 
       # Update State
@@ -650,7 +650,7 @@ class NCParser:
         delta_col = f'Delta_{axis}'
         if tgt_col in df.columns:
             df[delta_col] = df[tgt_col].diff().fillna(0.0)
-            # Tgt_X/Y/Z dipertahankan untuk Euclidean Distance di SinuTrain Synchronizer
+            df = df.drop(columns=[tgt_col])
 
     # 4. Tambahkan 'Spline_Curvature' Terkondisi (Khusus G01)
     # Menggunakan turunan kedua dari Delta_X/Y/Z dengan rolling window 11 baris,

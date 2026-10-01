@@ -185,8 +185,22 @@ class SinuTrainSynchronizer:
 
             last_actual_idx = actual_idx
 
+        # 4. Kalkulasi Estimasi Durasi Teoritis (s) (Hanya untuk informasi, bukan untuk AI)
+        # Jarak 3D dibagi dengan Target_Feedrate (rata-rata aktual). Kita ubah menit ke detik.
+        # Jika feedrate == 0, durasi dipaksa menjadi 0.0
+        jarak_3d = df_gcode['Delta_3D'].values
+        feedrates_arr = np.array(feedrates)
+
+        estimasi_durasi_teoritis = np.where(
+            feedrates_arr > 0.0,
+            (jarak_3d / np.maximum(feedrates_arr, 1e-6)) * 60.0,
+            0.0
+        )
+
+        # Simpan
         df_gcode['Duration_Sec'] = durations
         df_gcode['Target_Feedrate'] = feedrates
+        df_gcode['Estimasi_Durasi_Teoritis_s'] = estimasi_durasi_teoritis
 
         return df_gcode
 

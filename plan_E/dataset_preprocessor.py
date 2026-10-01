@@ -24,7 +24,7 @@ class DatasetPreprocessor:
             'Is_Cycle800', 'Is_MCALL_Sub', 'C832_Tol', 'C832_Mode',
             'Delta_X', 'Delta_Y', 'Delta_Z', 'Spline_Curvature',
             'Delta_3D', 'Delta_Rot', 'Tool_Vector_Delta', 'Kinematic_Blend_Ratio', 'Rotary_Velocity_Demand', 'Sharpness_Angle',
-            'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Theo_Duration', 'Turn_Count', 'Is_Partial_Arc', 'Is_Z_Plunge',
+            'Is_Motion_Block', 'Is_Reversal_X', 'Is_Reversal_Y', 'Is_Reversal_Z', 'Turn_Count', 'Is_Partial_Arc', 'Is_Z_Plunge',
             'Kinematic_Speed_Limit', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3'
         ]
 
@@ -44,10 +44,6 @@ class DatasetPreprocessor:
         df_out['Rotary_Velocity_Demand'] = np.log1p(np.maximum(0.0, df_out['Rotary_Velocity_Demand'].values))
         df_out['Cmd_F'] = np.log1p(np.maximum(0.0, df_out['Cmd_F'].values))
         df_out['Sharpness_Angle'] = df_out['Sharpness_Angle'].values / np.pi
-
-        # Log kompresi untuk Theo_Duration karena rentangnya bisa bervariasi dari ms hingga menit
-        if 'Theo_Duration' in df_out.columns:
-            df_out['Theo_Duration'] = np.log1p(np.maximum(0.0, df_out['Theo_Duration'].values))
 
         # Log kompresi untuk blend ratio karena bisa meledak saat translasi = 0
         if 'Kinematic_Blend_Ratio' in df_out.columns:
@@ -111,9 +107,6 @@ class DatasetPreprocessor:
             standstill_df['Kinematic_Blend_Ratio'] = 0.0
         if 'Rotary_Velocity_Demand' in standstill_df.columns:
             standstill_df['Rotary_Velocity_Demand'] = 0.0
-        if 'Theo_Duration' in standstill_df.columns:
-            # Durasi diam = 0
-            standstill_df['Theo_Duration'] = 0.0
         if 'Turn_Count' in standstill_df.columns:
             standstill_df['Turn_Count'] = 0.0
         if 'Is_Partial_Arc' in standstill_df.columns:
