@@ -409,7 +409,6 @@ class NCParser:
               "Is_Reversal_Z": (
                   1 if (dz * self.state.prev_dz < 0 and abs(dz) > 1e-4) else 0
               ),
-              "Theo_Duration": theo_duration,
           })
 
           # Update state
@@ -621,7 +620,6 @@ class NCParser:
           "Is_Reversal_X": is_reversal_x,
           "Is_Reversal_Y": is_reversal_y,
           "Is_Reversal_Z": is_reversal_z,
-          "Theo_Duration": theo_duration,
       })
 
       # Update State

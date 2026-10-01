@@ -76,18 +76,16 @@ def predict_nc_file(mpf_filepath: str,
     # Dapatkan jarak efektif (hindari div-by-zero)
     effective_distance = np.maximum(effective_distance, 1e-6)
 
-    # Ambil Theo_Duration dari parser
-    theo_durations = df_parsed['Theo_Duration'].values
     is_motion = df_parsed['Is_Motion_Block'].values
 
     # Waktu eksekusi:
     # - Jika Motion Block (1): Gunakan Jarak / Prediksi Kecepatan Aktual dari AI
-    # - Jika Non-Motion (0): Gunakan durasi mutlak dari parser (contoh: Dwell Time G04)
+    # - Jika Non-Motion (0): Tetapkan waktu 0.0 karena parameter teoritis sudah dihapus
     df_parsed['Predicted_Feedrate_mm_min'] = predicted_feedrate
     block_durations_sec = np.where(
         is_motion == 1,
         (effective_distance / predicted_feedrate) * 60.0,
-        theo_durations  # Mengambil nilai absolut dwell time / delay
+        0.0  # Waktu eksekusi statis nol
     )
     df_parsed['Estimated_Duration_Sec'] = block_durations_sec
 
