@@ -9,23 +9,28 @@ import tensorflow.keras.backend as K
 from tensorflow.keras import layers, models, callbacks, optimizers
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from typing import Tuple
 
-import tensorflow.keras.backend as K
-
 @tf.keras.utils.register_keras_serializable()
-def custom_time_loss(y_true, y_pred):
-    """
-    Fungsi loss sederhana berbasis MAE yang kebal NaN
-    dioptimalkan untuk prediksi waktu eksekusi.
-    """
+def custom_braking_huber_loss(y_true, y_pred):
+    # Proteksi tipe data terhadap mixed_float16
     y_true_f32 = tf.cast(y_true, tf.float32)
     y_pred_f32 = tf.cast(y_pred, tf.float32)
 
     error = tf.abs(y_true_f32 - y_pred_f32)
+    # Gunakan clip_by_value pada error untuk menahan ledakan kuadrat sebelum dimasukkan ke tf.square
     error_safe = tf.clip_by_value(error, 0.0, 1000.0)
 
-    return tf.reduce_mean(error_safe)
+    delta = tf.constant(0.1, dtype=tf.float32)
+    mse_loss = 0.5 * tf.square(error_safe)
+    mae_loss = delta * error_safe - 0.5 * tf.square(delta)
+
+    huber_base = tf.where(error_safe <= delta, mse_loss, mae_loss)
+    penalty_multiplier = tf.where(y_true_f32 < 0.0, tf.constant(5.0, dtype=tf.float32), tf.constant(1.0, dtype=tf.float32))
+
+    return tf.reduce_mean(huber_base * penalty_multiplier)
+
 
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 256) -> tf.keras.Model:
     """Membangun arsitektur Dual-Layer Bi-LSTM dengan Multi-Head Attention dan Dinamis Center Bypass."""
@@ -53,15 +58,15 @@ def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3
     d = layers.Dense(256, activation="relu")(merged)
     d = layers.Dropout(0.2)(d)
     d = layers.Dense(64, activation="relu")(d)
-    outputs = layers.Dense(1, activation="linear", name="Predicted_Time_Output", dtype="float32")(d)
+    outputs = layers.Dense(1, activation="linear", name="Normalized_Feedrate_Output", dtype="float32")(d)
 
     model = models.Model(inputs=inputs, outputs=outputs, name="CNC_Kinematics_BiLSTM_Plan_B")
 
     # Tambahkan clipnorm=1.0 pada optimizer
     optimizer = optimizers.AdamW(learning_rate=learning_rate, weight_decay=1e-4, clipnorm=1.0)
 
-    # Ganti MAPE dengan custom_time_loss
-    model.compile(optimizer=optimizer, loss=custom_time_loss, metrics=["mae", "mse"], jit_compile=True)
+    # Ganti MAPE dengan custom_braking_loss
+    model.compile(optimizer=optimizer, loss=custom_braking_huber_loss, metrics=["mae", "mse"], jit_compile=True)
 
     return model
 
@@ -162,7 +167,7 @@ class DualMonitorCallback(tf.keras.callbacks.Callback):
 
 def run_training(train_data, val_data,
                  input_shape: Tuple[int, int],
-                 model_save_path: str = "bilstm_time_model.keras",
+                 model_save_path: str = "bilstm_feedrate_model.keras",
                  checkpoint_dir: str = None,
                  resume_model_path: str = None,
                  learning_rate: float = 1e-3,
