@@ -386,7 +386,7 @@ class NCParser:
               "Tgt_X": sub_x,
               "Tgt_Y": sub_y,
               "Tgt_Z": sub_z,
-              "G04_Dwell_Time": dwell_time,
+              "G04_Dwell_Time": theo_duration,
               "Tgt_B": tgt_b,
               "Tgt_C": tgt_c,
               "Delta_3D": delta_3d,
@@ -604,7 +604,7 @@ class NCParser:
           "Tgt_X": tgt_x,
           "Tgt_Y": tgt_y,
           "Tgt_Z": tgt_z,
-          "G04_Dwell_Time": dwell_time,
+          "G04_Dwell_Time": theo_duration,
           "Tgt_B": tgt_b,
           "Tgt_C": tgt_c,
           "Delta_3D": delta_3d,
@@ -650,7 +650,7 @@ class NCParser:
         delta_col = f'Delta_{axis}'
         if tgt_col in df.columns:
             df[delta_col] = df[tgt_col].diff().fillna(0.0)
-            df = df.drop(columns=[tgt_col])
+            # df = df.drop(columns=[tgt_col]) # Tgt_X, Tgt_Y, Tgt_Z dipertahankan untuk trace_synchronizer
 
     # 4. Tambahkan 'Spline_Curvature' Terkondisi (Khusus G01)
     # Menggunakan turunan kedua dari Delta_X/Y/Z dengan rolling window 11 baris,
