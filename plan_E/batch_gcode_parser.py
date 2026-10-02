@@ -194,11 +194,18 @@ class NCParser:
 
     # Absolute sequential execution index to avoid N99999 reset issues
     absolute_idx = 1
+    current_segment = 1
 
     n_offset = 0
     prev_n = 0
 
     for raw_line in lines:
+      l_lower = raw_line.lower()
+      if 'begin.txt' in l_lower:
+          current_segment = 2
+      elif 'end.txt' in l_lower:
+          current_segment = 3
+
       line = raw_line.strip()
       # Hapus komentar (ditandai dengan semicolon ;)
       if ";" in line:
@@ -359,6 +366,7 @@ class NCParser:
               theo_duration = (delta_3d / safe_f) * 60.0
 
           parsed_rows.append({
+              "Segment": current_segment,
               "Block_ID": sub_id,
               "N_Number": n_number if n_number else -1,
               "Cmd_F": effective_f,
@@ -577,6 +585,7 @@ class NCParser:
       # ----------------------------------------
 
       parsed_rows.append({
+          "Segment": current_segment,
           "Block_ID": str(block_id),
           "N_Number": n_number if n_number else -1,
           "Cmd_F": effective_limit_f,
