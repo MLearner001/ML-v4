@@ -101,7 +101,7 @@ class SinuTrainSynchronizer:
         """
         df_gcode = df_parsed_gcode.copy()
 
-        # In case there's no Segment logic applied to parser due to old cache
+        # Fallback jika Segment tidak ada (kompatibilitas cache lama)
         if 'Segment' not in df_gcode.columns:
             df_gcode['Segment'] = 2
 
@@ -141,6 +141,7 @@ class SinuTrainSynchronizer:
         # Prepare target arrays aligned with df_gcode
         durations = np.zeros(len(df_gcode), dtype=float)
         feedrates = np.zeros(len(df_gcode), dtype=float)
+        estimasi_durasis = np.zeros(len(df_gcode), dtype=float)
 
         # Helper: Proporsional untuk Segment 1 dan 3
         def process_proportional_zone(group_indices, start_idx_bound, end_idx_bound):
@@ -153,10 +154,6 @@ class SinuTrainSynchronizer:
 
             for i_local, idx in enumerate(group_indices):
                 d_3d = float(df_gcode.loc[idx, 'Delta_3D'])
-                d_rot = float(df_gcode.loc[idx, 'Delta_Rot'])
-                cmd_f_limit = float(df_gcode.loc[idx, 'Cmd_F'])
-                if cmd_f_limit <= 0.0:
-                    cmd_f_limit = 20000.0
 
                 if tot_dist > 0:
                     porsi = d_3d / tot_dist
@@ -170,45 +167,35 @@ class SinuTrainSynchronizer:
                 if i_local == len(group_indices) - 1:
                     curr_slice_end = end_idx_bound
 
-                ticks = curr_slice_end - curr_slice_start
-                if ticks > 0:
-                    v_slice = trace_velocs[curr_slice_start:curr_slice_end]
-                    f_raw = float(np.mean(v_slice))
-                else:
-                    safe_idx = min(curr_slice_start, len(trace_velocs)-1)
-                    f_raw = float(trace_velocs[safe_idx])
-
-                # Durasi asli SinuTrain: trace_times[end] - trace_times[start]
                 if curr_slice_end > curr_slice_start and curr_slice_end <= len(trace_times):
-                    t_sub = float(trace_times[curr_slice_end - 1] - trace_times[curr_slice_start])
+                    # Mengambil selisih persis ujung awal hingga ujung akhir seperti skrip pengguna
+                    dur = float(trace_times[curr_slice_end] - trace_times[curr_slice_start])
+                    v_slice = trace_velocs[curr_slice_start:curr_slice_end]
+                    v_avg = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
                 else:
-                    t_sub = 0.0
+                    dur = 0.0
+                    v_avg = 0.0
 
-                # Perbaikan dari skrip new_sync.py: kita tidak menimpa / membatasi dengan Physical Guard,
-                # melainkan hanya mengambil nilai aktual dari Trace.
-                if t_sub <= 0.0:
-                     t_sub = float(dt)
-
-                f_clamped = f_raw
-                if f_clamped <= 0.0:
-                     f_clamped = cmd_f_limit
+                est_dur = 0.0 if v_avg <= 0 else (d_3d / (v_avg / 60.0))
 
                 iloc_idx = df_gcode.index.get_loc(idx)
-                durations[iloc_idx] = float(t_sub)
-                feedrates[iloc_idx] = float(f_clamped)
+                durations[iloc_idx] = dur
+                feedrates[iloc_idx] = v_avg
+                estimasi_durasis[iloc_idx] = est_dur
+
                 curr_slice_start = curr_slice_end
 
             return curr_slice_start
 
-        # --- ZONA 1 (Persiapan) ---
+        # --- Pembagian Zona ---
         seg1_indices = df_gcode[df_gcode['Segment'] == 1].index
         seg2_indices = df_gcode[df_gcode['Segment'] == 2].index
         seg3_indices = df_gcode[df_gcode['Segment'] == 3].index
 
         last_actual_idx = 0
 
+        # --- ZONA 1 (Persiapan) ---
         if len(seg1_indices) > 0:
-            # Mencari batas untuk Segment 1 (yaitu awal dari Segment 2)
             if len(seg2_indices) > 0:
                 first_seg2_block = int(df_gcode.loc[seg2_indices[0], 'N_Number'])
                 # Forward-fill if anonymous block
@@ -216,8 +203,8 @@ class SinuTrainSynchronizer:
                      first_seg2_block = max(1, int(df_gcode.loc[seg2_indices[0]-1, 'N_Number']))
 
                 ref_first_seg2 = get_next_valid_line(first_seg2_block)
-                if ref_first_seg2 in line_end_indices:
-                    seg1_end_bound = line_end_indices[ref_first_seg2]
+                if ref_first_seg2 in valid_trace_lines:
+                    seg1_end_bound = np.where(trace_linenum == ref_first_seg2)[0][0]
                 else:
                     seg1_end_bound = min(100, len(trace_coords)-1)
             else:
@@ -237,10 +224,6 @@ class SinuTrainSynchronizer:
 
             target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
             d_3d = float(row.get('Delta_3D', 0.0))
-            d_rot = float(row.get('Delta_Rot', 0.0))
-            cmd_f_limit = float(row.get('Cmd_F', 20000.0))
-            if cmd_f_limit <= 0.0:
-                cmd_f_limit = 20000.0
 
             ref_block = get_next_valid_line(block_id)
             end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
@@ -248,10 +231,7 @@ class SinuTrainSynchronizer:
                  end_bound_idx = last_actual_idx
 
             end_search_idx = min(end_bound_idx + 10, len(trace_coords))
-            start_search_idx = last_actual_idx
-
-            if end_search_idx <= start_search_idx:
-                 end_search_idx = start_search_idx + 1
+            start_search_idx = min(last_actual_idx, end_search_idx)
 
             search_window = trace_coords[start_search_idx:end_search_idx]
 
@@ -262,51 +242,31 @@ class SinuTrainSynchronizer:
                 min_local_idx = np.argmin(distances)
                 actual_idx = start_search_idx + min_local_idx
 
-            ticks = actual_idx - last_actual_idx
-
-            if d_3d > 1.0 and ticks <= 2:
-                # Terlalu sedikit tick untuk jarak besar, ini anomali / tidak ada eksekusi nyata
-                f_raw = cmd_f_limit
-            else:
-                if ticks > 0:
-                    v_slice = trace_velocs[last_actual_idx:actual_idx]
-                    f_raw = float(np.mean(v_slice))
-                else:
-                    safe_idx = min(actual_idx, len(trace_velocs)-1)
-                    f_raw = float(trace_velocs[safe_idx])
-
-            # Durasi Aktual
             if actual_idx > last_actual_idx and actual_idx <= len(trace_times):
-                t_sub = float(trace_times[actual_idx - 1] - trace_times[last_actual_idx])
+                dur = float(trace_times[actual_idx] - trace_times[last_actual_idx])
+                v_slice = trace_velocs[last_actual_idx:actual_idx]
+                mean_feed = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
             else:
-                t_sub = 0.0
+                dur = 0.0
+                safe_idx = min(actual_idx, len(trace_velocs) - 1)
+                mean_feed = float(trace_velocs[safe_idx])
 
-            if t_sub <= 0.0:
-                t_sub = float(dt)
-
-            f_clamped = f_raw
-            if f_clamped <= 0.0:
-                 f_clamped = cmd_f_limit
+            est_dur = 0.0 if mean_feed <= 0 else (d_3d / (mean_feed / 60.0))
 
             iloc_idx = df_gcode.index.get_loc(idx)
-            durations[iloc_idx] = float(t_sub)
-            feedrates[iloc_idx] = float(f_clamped)
+            durations[iloc_idx] = dur
+            feedrates[iloc_idx] = mean_feed
+            estimasi_durasis[iloc_idx] = est_dur
+
             last_actual_idx = actual_idx
 
         # --- ZONA 3 (Postposition) ---
         if len(seg3_indices) > 0:
-            process_proportional_zone(seg3_indices, last_actual_idx, len(trace_coords)-1)
+            process_proportional_zone(seg3_indices, last_actual_idx, len(trace_coords))
 
         df_gcode['Duration_Sec'] = list(durations)
         df_gcode['Target_Feedrate'] = list(feedrates)
-
-        feedrates_arr = np.array(feedrates)
-        estimasi_durasi_teoritis = np.where(
-            feedrates_arr > 0.0,
-            (df_gcode['Delta_3D'].values / np.maximum(feedrates_arr, 1e-6)) * 60.0,
-            0.0
-        )
-        df_gcode['Estimasi_Durasi_Teoritis_s'] = estimasi_durasi_teoritis
+        df_gcode['Estimasi_Durasi_Teoritis_s'] = list(estimasi_durasis)
 
         return df_gcode
 
