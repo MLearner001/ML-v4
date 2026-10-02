@@ -167,10 +167,11 @@ class SinuTrainSynchronizer:
                 if i_local == len(group_indices) - 1:
                     curr_slice_end = end_idx_bound
 
-                if curr_slice_end > curr_slice_start and curr_slice_end <= len(trace_times):
-                    # Mengambil selisih persis ujung awal hingga ujung akhir seperti skrip pengguna
-                    dur = float(trace_times[curr_slice_end] - trace_times[curr_slice_start])
-                    v_slice = trace_velocs[curr_slice_start:curr_slice_end]
+                safe_start = min(curr_slice_start, len(trace_times) - 1)
+                safe_end = min(curr_slice_end, len(trace_times) - 1)
+                if safe_end > safe_start:
+                    dur = float(trace_times[safe_end] - trace_times[safe_start])
+                    v_slice = trace_velocs[safe_start:safe_end]
                     v_avg = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
                 else:
                     dur = 0.0
@@ -262,7 +263,7 @@ class SinuTrainSynchronizer:
 
         # --- ZONA 3 (Postposition) ---
         if len(seg3_indices) > 0:
-            process_proportional_zone(seg3_indices, last_actual_idx, len(trace_coords))
+            process_proportional_zone(seg3_indices, last_actual_idx, len(trace_coords) - 1)
 
         df_gcode['Duration_Sec'] = list(durations)
         df_gcode['Target_Feedrate'] = list(feedrates)
