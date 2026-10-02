@@ -101,6 +101,7 @@ class SinuTrainSynchronizer:
         """
         df_gcode = df_parsed_gcode.copy()
 
+        # In case there's no Segment logic applied to parser due to old cache
         if 'Segment' not in df_gcode.columns:
             df_gcode['Segment'] = 2
 
@@ -137,9 +138,11 @@ class SinuTrainSynchronizer:
         for ln in valid_trace_lines:
             line_end_indices[ln] = np.where(trace_linenum == ln)[0][-1]
 
+        # Prepare target arrays aligned with df_gcode
         durations = np.zeros(len(df_gcode), dtype=float)
         feedrates = np.zeros(len(df_gcode), dtype=float)
 
+        # Helper: Proporsional untuk Segment 1 dan 3
         def process_proportional_zone(group_indices, start_idx_bound, end_idx_bound):
             if len(group_indices) == 0:
                 return start_idx_bound
@@ -163,6 +166,7 @@ class SinuTrainSynchronizer:
                 n_samples = int(round(porsi * tot_samples))
                 curr_slice_end = min(curr_slice_start + n_samples, end_idx_bound)
 
+                # Paksa blok terakhir mengambil semua sisa sampel
                 if i_local == len(group_indices) - 1:
                     curr_slice_end = end_idx_bound
 
@@ -174,20 +178,20 @@ class SinuTrainSynchronizer:
                     safe_idx = min(curr_slice_start, len(trace_velocs)-1)
                     f_raw = float(trace_velocs[safe_idx])
 
-                t_sub = float(max(ticks * dt, dt))
-
-                if d_3d < 1e-4 and d_rot < 1e-4:
-                    f_clamped = cmd_f_limit
-                    t_sub = float(max(ticks * dt, dt))
+                # Durasi asli SinuTrain: trace_times[end] - trace_times[start]
+                if curr_slice_end > curr_slice_start and curr_slice_end <= len(trace_times):
+                    t_sub = float(trace_times[curr_slice_end - 1] - trace_times[curr_slice_start])
                 else:
-                    f_clamped = min(f_raw, cmd_f_limit, 20000.0)
-                    if f_clamped < 1e-4:
-                        f_clamped = min(cmd_f_limit, 20000.0)
-                    kinematic_t = (d_3d / f_clamped) * 60.0
-                    t_sub = float(max(t_sub, kinematic_t))
+                    t_sub = 0.0
 
-                if t_sub < dt:
-                    t_sub = dt
+                # Perbaikan dari skrip new_sync.py: kita tidak menimpa / membatasi dengan Physical Guard,
+                # melainkan hanya mengambil nilai aktual dari Trace.
+                if t_sub <= 0.0:
+                     t_sub = float(dt)
+
+                f_clamped = f_raw
+                if f_clamped <= 0.0:
+                     f_clamped = cmd_f_limit
 
                 iloc_idx = df_gcode.index.get_loc(idx)
                 durations[iloc_idx] = float(t_sub)
@@ -196,6 +200,7 @@ class SinuTrainSynchronizer:
 
             return curr_slice_start
 
+        # --- ZONA 1 (Persiapan) ---
         seg1_indices = df_gcode[df_gcode['Segment'] == 1].index
         seg2_indices = df_gcode[df_gcode['Segment'] == 2].index
         seg3_indices = df_gcode[df_gcode['Segment'] == 3].index
@@ -203,8 +208,10 @@ class SinuTrainSynchronizer:
         last_actual_idx = 0
 
         if len(seg1_indices) > 0:
+            # Mencari batas untuk Segment 1 (yaitu awal dari Segment 2)
             if len(seg2_indices) > 0:
                 first_seg2_block = int(df_gcode.loc[seg2_indices[0], 'N_Number'])
+                # Forward-fill if anonymous block
                 if first_seg2_block <= 0:
                      first_seg2_block = max(1, int(df_gcode.loc[seg2_indices[0]-1, 'N_Number']))
 
@@ -218,6 +225,7 @@ class SinuTrainSynchronizer:
 
             last_actual_idx = process_proportional_zone(seg1_indices, 0, seg1_end_bound)
 
+        # --- ZONA 2 (Cutting - Hibrida Spasial) ---
         last_valid_block_id = 1
         for idx in seg2_indices:
             row = df_gcode.loc[idx]
@@ -257,6 +265,7 @@ class SinuTrainSynchronizer:
             ticks = actual_idx - last_actual_idx
 
             if d_3d > 1.0 and ticks <= 2:
+                # Terlalu sedikit tick untuk jarak besar, ini anomali / tidak ada eksekusi nyata
                 f_raw = cmd_f_limit
             else:
                 if ticks > 0:
@@ -266,31 +275,30 @@ class SinuTrainSynchronizer:
                     safe_idx = min(actual_idx, len(trace_velocs)-1)
                     f_raw = float(trace_velocs[safe_idx])
 
-            t_sub = float(max(ticks * dt, dt))
-
-            if d_3d < 1e-4 and d_rot < 1e-4:
-                f_clamped = cmd_f_limit
-                t_sub = float(max(ticks * dt, dt))
+            # Durasi Aktual
+            if actual_idx > last_actual_idx and actual_idx <= len(trace_times):
+                t_sub = float(trace_times[actual_idx - 1] - trace_times[last_actual_idx])
             else:
-                f_clamped = min(f_raw, cmd_f_limit, 20000.0)
-                if f_clamped < 1e-4:
-                    f_clamped = min(cmd_f_limit, 20000.0)
-                kinematic_t = (d_3d / f_clamped) * 60.0
-                t_sub = float(max(t_sub, kinematic_t))
+                t_sub = 0.0
 
-            if t_sub < dt:
-                t_sub = dt
+            if t_sub <= 0.0:
+                t_sub = float(dt)
+
+            f_clamped = f_raw
+            if f_clamped <= 0.0:
+                 f_clamped = cmd_f_limit
 
             iloc_idx = df_gcode.index.get_loc(idx)
             durations[iloc_idx] = float(t_sub)
             feedrates[iloc_idx] = float(f_clamped)
             last_actual_idx = actual_idx
 
+        # --- ZONA 3 (Postposition) ---
         if len(seg3_indices) > 0:
             process_proportional_zone(seg3_indices, last_actual_idx, len(trace_coords)-1)
 
-        df_gcode['Duration_Sec'] = durations
-        df_gcode['Target_Feedrate'] = feedrates
+        df_gcode['Duration_Sec'] = list(durations)
+        df_gcode['Target_Feedrate'] = list(feedrates)
 
         feedrates_arr = np.array(feedrates)
         estimasi_durasi_teoritis = np.where(
