@@ -16,11 +16,16 @@ class SinuTrainSynchronizer:
 
     def clean_and_attribute_trace(self, df_trace: pd.DataFrame, gcode_blocks: List[str]) -> pd.DataFrame:
         """
-        Membersihkan trace dan mengatribusikan block number negatif (CYCLE800 swiveling & MCALL).
+        Membersihkan trace dan mengatribusikan block number negatif (CYCLE800 swiveling).
         """
         df = df_trace.copy()
 
+        # Standarisasi nama kolom trace SinuTrain jika diperlukan
+        # Bersihkan spasi kosong di kolom jika belum
         df.columns = df.columns.str.strip()
+
+        # Kolom utama: actLineNumber, f2/s2 (X), f3/s3 (Y), f4/s4 (Z), f5/s5 (B), f6/s6 (C)
+        # Pada beberapa export, nama kolom mengandung path panjang seperti '/Channel/!SPARP/actLineNumber [u1  1]'
 
         def find_column_by_substrings(substrings: List[str]) -> str:
             for col in df.columns:
@@ -28,62 +33,64 @@ class SinuTrainSynchronizer:
                     return col
             return None
 
+        # Temukan kolom actLineNumber
         col_line = find_column_by_substrings(['actLineNumber', 'f1\\s1', 'f1/s1'])
         if not col_line:
+            # Fallback agresif
             col_line = find_column_by_substrings(['f1', 's1'])
             if not col_line:
                 raise KeyError(f"Kolom Line Number tidak ditemukan di file trace! Kolom yang tersedia: {list(df.columns)}")
         df.rename(columns={col_line: 'actLineNumber'}, inplace=True)
 
-        col_x = find_column_by_substrings(['f2\\s2', 'f2/s2', 'f2', 'actToolBasePos[0]'])
-        col_y = find_column_by_substrings(['f3\\s3', 'f3/s3', 'f3', 'actToolBasePos[1]'])
-        col_z = find_column_by_substrings(['f4\\s4', 'f4/s4', 'f4', 'actToolBasePos[2]'])
+        # Temukan kolom f5/s5 (B) dan f6/s6 (C)
+        # Pada file Siemens .csv raw sering digunakan backslash
         col_b = find_column_by_substrings(['f5\\s5', 'f5/s5', 'f5', 'actToolBasePos[3]'])
         col_c = find_column_by_substrings(['f6\\s6', 'f6/s6', 'f6', 'actToolBasePos[4]'])
 
-        delta_x = pd.to_numeric(df[col_x], errors='coerce').diff().abs().fillna(0) if col_x else pd.Series(0, index=df.index)
-        delta_y = pd.to_numeric(df[col_y], errors='coerce').diff().abs().fillna(0) if col_y else pd.Series(0, index=df.index)
-        delta_z = pd.to_numeric(df[col_z], errors='coerce').diff().abs().fillna(0) if col_z else pd.Series(0, index=df.index)
-        delta_b = pd.to_numeric(df[col_b], errors='coerce').diff().abs().fillna(0) if col_b else pd.Series(0, index=df.index)
-        delta_c = pd.to_numeric(df[col_c], errors='coerce').diff().abs().fillna(0) if col_c else pd.Series(0, index=df.index)
+        # Hitung diff posisi B dan C (Numerical Position Differentiation)
+        if col_b and col_b in df.columns:
+            delta_b = pd.to_numeric(df[col_b], errors='coerce').diff().abs().fillna(0)
+        else:
+            delta_b = pd.Series(0, index=df.index)
 
-        is_moving = (delta_x > 1e-4) | (delta_y > 1e-4) | (delta_z > 1e-4) | (delta_b > 1e-4) | (delta_c > 1e-4)
+        if col_c and col_c in df.columns:
+            delta_c = pd.to_numeric(df[col_c], errors='coerce').diff().abs().fillna(0)
+        else:
+            delta_c = pd.Series(0, index=df.index)
+
+        is_rotary_moving = (delta_b > 1e-4) | (delta_c > 1e-4)
 
         mapped_blocks = []
+
+        # SinuTrain actLineNumber corresponds perfectly to G-Code N_Number
         last_valid_n_number = None
 
         for idx, row in df.iterrows():
             try:
+                # Handle possible NaN / empty string lines
                 raw_line = int(float(row['actLineNumber']))
             except (ValueError, TypeError):
                 mapped_blocks.append("IDLE")
                 continue
 
-            moving = is_moving.iloc[idx]
+            rot_moving = is_rotary_moving.iloc[idx]
 
             if raw_line > 0:
+                # G-Code line explicitly mapped
                 mapped_blocks.append(str(raw_line))
                 last_valid_n_number = str(raw_line)
 
-            elif raw_line < 0 and moving:
-                # Transisi CYCLE800 / MCALL
-                mapped_blocks.append(f"SUB_{last_valid_n_number}" if last_valid_n_number else "INIT_IDLE")
+            elif raw_line < 0 and rot_moving:
+                # Transisi CYCLE800 / Orientasi Bidang: Atribusikan ke blok parent CYCLE800 (the positive N_number)
+                mapped_blocks.append(f"C800_{last_valid_n_number}" if last_valid_n_number else "INIT_IDLE")
             else:
+                # Idle tanpa pergerakan signifikan
                 mapped_blocks.append("IDLE")
 
         df['mapped_block'] = mapped_blocks
+
+        # Buang baris trace yang tergolong IDLE murni (tidak ada eksekusi program benda kerja)
         df_valid = df[~df['mapped_block'].isin(["IDLE", "INIT_IDLE"])].copy()
-
-        # Override the actLineNumber so that the rest of the algorithms treat SUB blocks as part of the parent!
-        # This is critical so that `line_end_indices` covers the entire drilling sequence.
-        def remap_line(x):
-            if str(x).startswith("SUB_"):
-                return int(str(x).replace("SUB_", ""))
-            elif str(x).isdigit():
-                return int(x)
-            return x
-
-        df_valid['actLineNumber'] = df_valid['mapped_block'].apply(remap_line)
         return df_valid
 
     def match_and_calculate_targets(self, df_parsed_gcode: pd.DataFrame, df_trace_valid: pd.DataFrame) -> pd.DataFrame:
@@ -165,29 +172,10 @@ class SinuTrainSynchronizer:
                 if safe_end > safe_start:
                     dur = float(trace_times[safe_end] - trace_times[safe_start])
                     v_slice = trace_velocs[safe_start:safe_end]
-                    v_avg_raw = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
+                    v_avg = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
                 else:
                     dur = 0.0
-                    v_avg_raw = 0.0
-
-                cmd_f_limit = df_gcode.loc[idx, 'Cmd_F']
-                if pd.isnull(cmd_f_limit): cmd_f_limit = 20000.0
-
-                # 1. Clamp Feedrate
-                v_avg = min(v_avg_raw, cmd_f_limit, 20000.0)
-
-                rot_3d = float(df_gcode.loc[idx, 'Delta_Rot']) if 'Delta_Rot' in df_gcode.columns else 0.0
-                if pd.isnull(rot_3d): rot_3d = 0.0
-
-                # 2. Non-motion clamp
-                if d_3d <= 1e-4 and rot_3d <= 1e-4:
-                    v_avg = cmd_f_limit
-
-                # 3. Realistic duration guard
-                if d_3d > 1e-4:
-                    eff_feed = v_avg if v_avg > 0 else cmd_f_limit
-                    if eff_feed > 0:
-                        dur = max(dur, (d_3d / eff_feed) * 60.0)
+                    v_avg = 0.0
 
                 est_dur = 0.0 if v_avg <= 0 else (d_3d / (v_avg / 60.0))
 
@@ -230,56 +218,72 @@ class SinuTrainSynchronizer:
         for idx in seg2_indices:
             row = df_gcode.loc[idx]
             block_id = int(row['N_Number'])
+            is_mcall = int(row.get('Is_MCALL_Sub', 0))
+
+            # 1. Forward-fill N_Number untuk menangani blok MCALL/turunan yang tidak bernomor
             if block_id > 0:
                 last_valid_block_id = block_id
             else:
                 block_id = last_valid_block_id
 
-            target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
-            d_3d = float(row.get('Delta_3D', 0.0))
+            if is_mcall == 1:
+                # KASUS A: BLOK PECAHAN MCALL (Gunakan Interpolasi Teoritis)
+                # Ambil Target Feedrate dari Command (karena data Trace terkompresi)
+                cmd_feed = float(row.get('Cmd_F', 0.0))
+                dist_3d = float(row.get('Delta_3D', 0.0))
+                is_dwell = int(row.get('Is_G01', -1)) == -1 and int(row.get('Is_G02', -1)) == -1 and int(row.get('Is_G03', -1)) == -1 # Simulasi cek dwell
 
-            ref_block = get_next_valid_line(block_id)
-            end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
-            if end_bound_idx < last_actual_idx:
-                 end_bound_idx = last_actual_idx
+                # Cek khusus untuk G04 Dwell Time di dalam siklus MCALL
+                if float(row.get('G04_Dwell_Time', 0.0)) > 0.0:
+                    durasi_trace = float(row.get('G04_Dwell_Time'))
+                    mean_feedrate = 0.0
+                else:
+                    mean_feedrate = cmd_feed
+                    # Hitung durasi secara proporsional berdasar jarak dan Cmd_F
+                    durasi_trace = (dist_3d / (cmd_feed / 60.0)) if cmd_feed > 0.0 else 0.0
 
-            end_search_idx = min(end_bound_idx + 10, len(trace_coords))
-            start_search_idx = min(last_actual_idx, end_search_idx)
+                # Tidak perlu update last_actual_idx agar pencarian Euclidean selanjutnya tetap sinkron
+                actual_idx = last_actual_idx
 
-            search_window = trace_coords[start_search_idx:end_search_idx]
+                dur = durasi_trace
+                mean_feed = mean_feedrate
+                d_3d = dist_3d
 
-            if len(search_window) == 0:
-                actual_idx = start_search_idx
             else:
-                distances = np.linalg.norm(search_window - target_xyz, axis=1)
-                min_local_idx = np.argmin(distances)
-                actual_idx = start_search_idx + min_local_idx
+                # KASUS B: BLOK STANDAR (Gunakan Hibrida Spasial - Batas Sinyal)
+                target_xyz = np.array([row.get('Tgt_X', 0.0), row.get('Tgt_Y', 0.0), row.get('Tgt_Z', 0.0)])
+                d_3d = float(row.get('Delta_3D', 0.0))
 
-            if actual_idx > last_actual_idx and actual_idx <= len(trace_times):
-                dur = float(trace_times[actual_idx] - trace_times[last_actual_idx])
-                v_slice = trace_velocs[last_actual_idx:actual_idx]
-                mean_feed_raw = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
-            else:
-                dur = 0.0
-                safe_idx = min(actual_idx, len(trace_velocs) - 1)
-                mean_feed_raw = float(trace_velocs[safe_idx])
+                ref_block = get_next_valid_line(block_id)
+                end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
+                end_search_idx = min(end_bound_idx + 10, len(trace_coords))
 
-            cmd_f_limit = row.get('Cmd_F', 20000.0)
-            if pd.isnull(cmd_f_limit):
-                cmd_f_limit = 20000.0
+                start_search_idx = min(last_actual_idx, end_search_idx)
 
-            mean_feed = min(mean_feed_raw, cmd_f_limit, 20000.0)
+                if end_search_idx <= start_search_idx:
+                     end_search_idx = start_search_idx + 1
 
-            rot_3d = float(row.get('Delta_Rot', 0.0))
-            if pd.isnull(rot_3d): rot_3d = 0.0
+                search_window = trace_coords[start_search_idx:end_search_idx]
 
-            if d_3d <= 1e-4 and rot_3d <= 1e-4:
-                mean_feed = cmd_f_limit
+                if len(search_window) == 0:
+                    actual_idx = start_search_idx
+                else:
+                    distances = np.linalg.norm(search_window - target_xyz, axis=1)
+                    min_local_idx = np.argmin(distances)
+                    actual_idx = start_search_idx + min_local_idx
 
-            if d_3d > 1e-4:
-                eff_feed = mean_feed if mean_feed > 0 else cmd_f_limit
-                if eff_feed > 0:
-                    dur = max(dur, (d_3d / eff_feed) * 60.0)
+                durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
+
+                if actual_idx > last_actual_idx:
+                    v_slice = trace_velocs[last_actual_idx:actual_idx]
+                    mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
+                else:
+                    safe_idx = min(actual_idx, len(trace_velocs)-1)
+                    mean_feedrate = trace_velocs[safe_idx]
+
+                last_actual_idx = actual_idx
+                dur = durasi_trace
+                mean_feed = mean_feedrate
 
             est_dur = 0.0 if mean_feed <= 0 else (d_3d / (mean_feed / 60.0))
 
@@ -287,8 +291,6 @@ class SinuTrainSynchronizer:
             durations[iloc_idx] = dur
             feedrates[iloc_idx] = mean_feed
             estimasi_durasis[iloc_idx] = est_dur
-
-            last_actual_idx = actual_idx
 
         # --- ZONA 3 (Postposition) ---
         if len(seg3_indices) > 0:
