@@ -258,7 +258,8 @@ class SinuTrainSynchronizer:
                 end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
                 end_search_idx = min(end_bound_idx + 10, len(trace_coords))
 
-                start_search_idx = min(last_actual_idx, end_search_idx)
+                # PROTEKSI 1: INDEKS PANTANG MUNDUR (Tidak boleh pakai min())
+                start_search_idx = last_actual_idx
 
                 if end_search_idx <= start_search_idx:
                      end_search_idx = start_search_idx + 1
