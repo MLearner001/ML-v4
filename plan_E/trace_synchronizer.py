@@ -287,10 +287,12 @@ class SinuTrainSynchronizer:
                     if len(v_slice_moving) > 0:
                         mean_feedrate = float(np.mean(v_slice_moving))
                     else:
-                        mean_feedrate = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
+                        mean_feedrate = float(np.mean(v_slice)) if len(v_slice) > 0 else float(row.get('Cmd_F', 0.0))
                 else:
-                    safe_idx = min(actual_idx, len(trace_velocs)-1)
-                    mean_feedrate = float(trace_velocs[safe_idx])
+                    # FIX 4: KONTINUITAS AI UNTUK BLOK NON-MOTION
+                    # Alih-alih membaca sensor yang bernilai 0.0, wariskan Cmd_F
+                    # agar grafik Target_Feedrate tetap lurus dan tidak membingungkan AI.
+                    mean_feedrate = float(row.get('Cmd_F', 0.0))
 
                 last_actual_idx = actual_idx
                 dur = durasi_trace
