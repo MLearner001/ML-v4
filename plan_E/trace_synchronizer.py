@@ -219,6 +219,7 @@ class SinuTrainSynchronizer:
             row = df_gcode.loc[idx]
             block_id = int(row['N_Number'])
             is_mcall = int(row.get('Is_MCALL_Sub', 0))
+            is_motion = int(row.get('Is_Motion_Block', 0))
 
             # 1. Forward-fill N_Number untuk menangani blok MCALL/turunan yang tidak bernomor
             if block_id > 0:
@@ -228,13 +229,11 @@ class SinuTrainSynchronizer:
 
             if is_mcall == 1:
                 # KASUS A: BLOK PECAHAN MCALL (Gunakan Interpolasi Teoritis)
-                # Ambil Target Feedrate dari Command (karena data Trace terkompresi)
                 cmd_feed = float(row.get('Cmd_F', 0.0))
                 dist_3d = float(row.get('Delta_3D', 0.0))
-                is_dwell = int(row.get('Is_G01', -1)) == -1 and int(row.get('Is_G02', -1)) == -1 and int(row.get('Is_G03', -1)) == -1 # Simulasi cek dwell
 
-                # Cek khusus untuk G04 Dwell Time di dalam siklus MCALL
-                if float(row.get('G04_Dwell_Time', 0.0)) > 0.0:
+                # FIX 1: Hanya matikan feedrate jika mesin BENAR-BENAR diam (Dwell Asli)
+                if is_motion == 0 and float(row.get('G04_Dwell_Time', 0.0)) > 0.0:
                     durasi_trace = float(row.get('G04_Dwell_Time'))
                     mean_feedrate = 0.0
                 else:
@@ -242,9 +241,8 @@ class SinuTrainSynchronizer:
                     # Hitung durasi secara proporsional berdasar jarak dan Cmd_F
                     durasi_trace = (dist_3d / (cmd_feed / 60.0)) if cmd_feed > 0.0 else 0.0
 
-                # Tidak perlu update last_actual_idx agar pencarian Euclidean selanjutnya tetap sinkron
+                # Bekukan indeks agar pencarian spasial blok berikutnya tidak terdistorsi
                 actual_idx = last_actual_idx
-
                 dur = durasi_trace
                 mean_feed = mean_feedrate
                 d_3d = dist_3d
@@ -258,7 +256,7 @@ class SinuTrainSynchronizer:
                 end_bound_idx = line_end_indices.get(ref_block, len(trace_coords)-1)
                 end_search_idx = min(end_bound_idx + 10, len(trace_coords))
 
-                # PROTEKSI 1: INDEKS PANTANG MUNDUR (Tidak boleh pakai min())
+                # FIX 2: INDEKS PANTANG MUNDUR (Hapus fungsi min())
                 start_search_idx = last_actual_idx
 
                 if end_search_idx <= start_search_idx:
@@ -278,7 +276,7 @@ class SinuTrainSynchronizer:
                 if actual_idx > last_actual_idx:
                     v_slice = trace_velocs[last_actual_idx:actual_idx]
 
-                    # PROTEKSI 2: FILTER GENANGAN WAKTU (Abaikan kecepatan < 5.0 mm/min)
+                    # FIX 3: FILTER GENANGAN WAKTU (Abaikan kecepatan < 5.0 mm/min)
                     v_slice_moving = v_slice[v_slice > 5.0]
                     if len(v_slice_moving) > 0:
                         mean_feedrate = float(np.mean(v_slice_moving))
