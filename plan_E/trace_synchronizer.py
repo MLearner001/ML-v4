@@ -273,6 +273,12 @@ class SinuTrainSynchronizer:
 
                 durasi_trace = trace_times[actual_idx] - trace_times[last_actual_idx]
 
+                # FIX: Buang "Celengan Waktu" jika ini adalah blok non-motion pasca-MCALL
+                is_motion = int(row.get('Is_Motion_Block', 0))
+                if is_motion == 0:
+                    durasi_trace = 0.0
+                    # Kita update last_actual_idx ke posisi sekarang, tapi tidak membebankan waktunya
+
                 if actual_idx > last_actual_idx:
                     v_slice = trace_velocs[last_actual_idx:actual_idx]
 
