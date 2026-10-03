@@ -276,10 +276,16 @@ class SinuTrainSynchronizer:
 
                 if actual_idx > last_actual_idx:
                     v_slice = trace_velocs[last_actual_idx:actual_idx]
-                    mean_feedrate = np.mean(v_slice) if len(v_slice) > 0 else 0.0
+
+                    # PROTEKSI 2: FILTER GENANGAN WAKTU (Abaikan kecepatan < 5.0 mm/min)
+                    v_slice_moving = v_slice[v_slice > 5.0]
+                    if len(v_slice_moving) > 0:
+                        mean_feedrate = float(np.mean(v_slice_moving))
+                    else:
+                        mean_feedrate = float(np.mean(v_slice)) if len(v_slice) > 0 else 0.0
                 else:
                     safe_idx = min(actual_idx, len(trace_velocs)-1)
-                    mean_feedrate = trace_velocs[safe_idx]
+                    mean_feedrate = float(trace_velocs[safe_idx])
 
                 last_actual_idx = actual_idx
                 dur = durasi_trace
