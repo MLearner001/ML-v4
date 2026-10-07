@@ -94,7 +94,12 @@ def predict_nc_file(mpf_filepath: str,
     )
     df_parsed['Estimated_Duration_Sec'] = block_durations_sec
 
-    total_time_sec = float(np.sum(block_durations_sec))
+    # INSIGHT OPTIMASI: Nol-kan prediksi waktu untuk blok Persiapan (Segmen 1) dan Penutup (Segmen 3).
+    # Waktu di area ini bersifat statis (overhead) dan akan mengganggu metrik waktu pemotongan murni (Segmen 2).
+    if 'Segment' in df_parsed.columns:
+        df_parsed.loc[df_parsed['Segment'].isin([1, 3]), 'Estimated_Duration_Sec'] = 0.0
+
+    total_time_sec = float(df_parsed['Estimated_Duration_Sec'].sum())
     total_time_min = total_time_sec / 60.0
 
     # Simpan hasil analisis profil feedrate ke CSV
