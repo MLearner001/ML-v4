@@ -61,18 +61,19 @@ class DatasetPreprocessor:
         self.feature_scaler.fit(combined_df[self.feature_cols])
         self.target_scaler.fit(combined_df[['Target_Feedrate']])
 
-    def fit_transform_dataset(self, df_list: List[pd.DataFrame], is_resume: bool = False) -> Tuple[np.ndarray, np.ndarray]:
-        """Fit scaler pada kumpulan data training dan kembalikan tensor (X, Y). (Mode High-RAM)"""
+    def fit_transform_dataset(self, df_list: List[pd.DataFrame], is_resume: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Fit scaler pada kumpulan data training dan kembalikan tensor (X, Y, W). (Mode High-RAM)"""
         if not is_resume:
             self.fit_scalers_only(df_list)
 
-        X_all, Y_all = [], []
+        X_all, Y_all, W_all = [], [], []
         for df in df_list:
-            X_part, Y_part = self.transform_file(df, is_training=True)
+            X_part, Y_part, W_part = self.transform_file(df, is_training=True)
             X_all.append(X_part)
             Y_all.append(Y_part)
+            W_all.append(W_part)
 
-        return np.concatenate(X_all, axis=0), np.concatenate(Y_all, axis=0)
+        return np.concatenate(X_all, axis=0), np.concatenate(Y_all, axis=0), np.concatenate(W_all, axis=0)
 
     def get_padded_features(self, df_prep: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """Hanya mengembalikan representasi 2D yang di-pad dan Y ter-scale untuk generator."""
@@ -139,12 +140,15 @@ class DatasetPreprocessor:
 
         scaled_target = self.target_scaler.transform(df_prep[['Target_Feedrate']]).astype(np.float32) if 'Target_Feedrate' in df_prep.columns else None
 
-        return padded_features, scaled_target
+        # Buat bobot sampel: Penalti 3x untuk pergerakan TRAORI, lainnya 1.0
+        sample_weights = np.where(df_prep['Is_Traori'].values == 1, 3.0, 1.0).astype(np.float32)
+
+        return padded_features, scaled_target, sample_weights
 
     def transform_file(self, df: pd.DataFrame, is_training: bool = True):
         df_prep = self._apply_log_transforms(df, is_training=is_training)
 
-        padded_features, scaled_target = self.get_padded_features(df_prep)
+        padded_features, scaled_target, sample_weights = self.get_padded_features(df_prep)
 
         num_samples = len(df_prep)
         num_features = len(self.feature_cols)
@@ -154,7 +158,7 @@ class DatasetPreprocessor:
             X_windows[i] = padded_features[i : i + self.window_size]
 
         if is_training:
-            return X_windows, scaled_target
+            return X_windows, scaled_target, sample_weights
 
         return X_windows
 
@@ -193,6 +197,7 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
         # Pre-compute padded 2D features untuk mempercepat ekstraksi window
         self.X_padded_list = []
         self.Y_list = []
+        self.W_list = []
         self.file_lengths = []
 
         self.total_samples = 0
@@ -202,10 +207,11 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
 
         for file_idx, df in enumerate(df_list):
             df_prep = preprocessor._apply_log_transforms(df, is_training=self.is_training)
-            padded_feat, scaled_y = preprocessor.get_padded_features(df_prep)
+            padded_feat, scaled_y, sample_w = preprocessor.get_padded_features(df_prep)
             self.X_padded_list.append(padded_feat)
             if self.is_training:
                 self.Y_list.append(scaled_y)
+                self.W_list.append(sample_w)
 
             num_rows = len(df)
             self.file_lengths.append(num_rows)
@@ -234,6 +240,7 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
 
         self.buffer_x = []
         self.buffer_y = []
+        self.buffer_w = []
 
     def _replenish_active_files(self):
         """Menambah file aktif hingga mencapai batas parallel_files"""
@@ -253,6 +260,7 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
                 self.buffer_x.append(window)
                 if self.is_training:
                     self.buffer_y.append(self.Y_list[f_idx][r_idx])
+                    self.buffer_w.append(self.W_list[f_idx][r_idx])
 
                 # Majukan pointer
                 active_f[1] += 1
@@ -271,6 +279,7 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
             np.random.shuffle(indices)
             self.buffer_x = [self.buffer_x[i] for i in indices]
             self.buffer_y = [self.buffer_y[i] for i in indices]
+            self.buffer_w = [self.buffer_w[i] for i in indices]
 
     def __len__(self):
         return self.batches_per_epoch
@@ -301,13 +310,15 @@ class SlidingWindowGenerator(tf.keras.utils.Sequence):
         take_count = min(self.batch_size, len(self.buffer_x))
         if take_count == 0:
             # Fallback jika kehabisan data di akhir epoch
-            return (np.zeros((1, self.window_size, len(self.preprocessor.feature_cols))), np.zeros((1, 1)))
+            return (np.zeros((1, self.window_size, len(self.preprocessor.feature_cols))), np.zeros((1, 1)), np.zeros((1,)))
 
         batch_x = np.array(self.buffer_x[:take_count], dtype=np.float32)
         batch_y = np.array(self.buffer_y[:take_count], dtype=np.float32)
+        batch_w = np.array(self.buffer_w[:take_count], dtype=np.float32)
 
         # Hapus item yang sudah diambil dari buffer
         self.buffer_x = self.buffer_x[take_count:]
         self.buffer_y = self.buffer_y[take_count:]
+        self.buffer_w = self.buffer_w[take_count:]
 
-        return batch_x, batch_y
+        return batch_x, batch_y, batch_w

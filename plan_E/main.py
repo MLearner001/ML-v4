@@ -127,17 +127,19 @@ def run_training_pipeline(train_dir: str, val_dir: str, out_dir: str, mem_mode: 
     if mem_mode == "high":
         print("[INFO] Menggunakan Mode HIGH RAM (Numpy Arrays 3D di Memori).")
         # Preprocessor menerima list dataframe dari berbagai file untuk di-fit scaler dan diubah ke window 3D
-        X_train, Y_train = preprocessor.fit_transform_dataset(train_dfs, is_resume=is_resume_scaler)
-        X_val, Y_val = [], []
+        X_train, Y_train, W_train = preprocessor.fit_transform_dataset(train_dfs, is_resume=is_resume_scaler)
+        X_val, Y_val, W_val = [], [], []
         if val_dfs:
-            X_val_list, Y_val_list = [], []
+            X_val_list, Y_val_list, W_val_list = [], [], []
             for df in val_dfs:
-                x_p, y_p = preprocessor.transform_file(df, is_training=True)
+                x_p, y_p, w_p = preprocessor.transform_file(df, is_training=True)
                 X_val_list.append(x_p)
                 Y_val_list.append(y_p)
+                W_val_list.append(w_p)
             if X_val_list:
                 X_val = np.concatenate(X_val_list, axis=0)
                 Y_val = np.concatenate(Y_val_list, axis=0)
+                W_val = np.concatenate(W_val_list, axis=0)
 
         preprocessor.save_scalers(scaler_path)
         print(f"Scaler parameters saved to {scaler_path}")
@@ -146,7 +148,11 @@ def run_training_pipeline(train_dir: str, val_dir: str, out_dir: str, mem_mode: 
         print(f"\n{'='*50}\n[TAHAP 4] Pelatihan Model Dual-Layer Bi-LSTM\n{'='*50}")
         input_shape = (X_train.shape[1], X_train.shape[2])
         ckpt_dir = os.path.join(out_dir, "checkpoints")
-        model, history = run_training((X_train, Y_train), (X_val, Y_val) if len(X_val) > 0 else None,
+
+        train_tuple = (X_train, Y_train, W_train)
+        val_tuple = (X_val, Y_val, W_val) if len(X_val) > 0 else None
+
+        model, history = run_training(train_tuple, val_tuple,
                                       input_shape=input_shape, model_save_path=output_model,
                                       checkpoint_dir=ckpt_dir, resume_model_path=resume_model,
                                       learning_rate=learning_rate, initial_epoch=initial_epoch,

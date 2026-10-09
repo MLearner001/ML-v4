@@ -35,7 +35,7 @@ def custom_braking_huber_loss(y_true, y_pred):
     # Pastikan huber_base tidak NaN
     huber_base = tf.where(tf.math.is_finite(huber_base), huber_base, tf.zeros_like(huber_base))
 
-    return tf.reduce_mean(huber_base * penalty_multiplier)
+    return huber_base * penalty_multiplier
 
 
 def build_bilstm_model(input_shape: Tuple[int, int], learning_rate: float = 1e-3, lstm_units: int = 256) -> tf.keras.Model:
@@ -250,17 +250,32 @@ def run_training(train_data, val_data,
 
     if isinstance(train_data, tuple):
         # Mode High RAM (numpy arrays)
-        X_train, Y_train = train_data
-        X_val, Y_val = val_data
-        history = model.fit(
-            X_train, Y_train,
-            validation_data=(X_val, Y_val),
-            epochs=epochs,
-            initial_epoch=initial_epoch,
-            batch_size=128,  # Batch size ini untuk tensorflow model fit jika pakai mode numpy array (HIGH RAM). Karena Low RAM pake generator, batch size diatur di generatornya.
-            callbacks=training_callbacks,
-            verbose=1
-        )
+        # Mendukung tuple 2 atau 3 elemen, jika 3 elemen, sertakan bobot
+        if len(train_data) == 3:
+            X_train, Y_train, W_train = train_data
+            X_val, Y_val, W_val = val_data
+            history = model.fit(
+                X_train, Y_train,
+                sample_weight=W_train,
+                validation_data=(X_val, Y_val, W_val),
+                epochs=epochs,
+                initial_epoch=initial_epoch,
+                batch_size=128,
+                callbacks=training_callbacks,
+                verbose=1
+            )
+        else:
+            X_train, Y_train = train_data
+            X_val, Y_val = val_data
+            history = model.fit(
+                X_train, Y_train,
+                validation_data=(X_val, Y_val),
+                epochs=epochs,
+                initial_epoch=initial_epoch,
+                batch_size=128,
+                callbacks=training_callbacks,
+                verbose=1
+            )
     else:
         # Mode Low RAM (generator)
         fit_kwargs = {
