@@ -49,6 +49,13 @@ def predict_nc_file(mpf_filepath: str,
     y_pred_log = preprocessor.target_scaler.inverse_transform(y_pred_scaled)
     raw_predicted_feedrate = np.maximum(1.0, np.expm1(y_pred_log).flatten())
 
+    # === MICRO-PENALTY 10% (0.90) UNTUK GERAK SIMULTAN ===
+    is_simultaneous = (df_parsed['Is_Traori'].values == 1) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
+    simultaneous_penalty = np.where(is_simultaneous, 0.90, 1.0)
+
+    raw_predicted_feedrate = raw_predicted_feedrate * simultaneous_penalty
+    # =====================================================
+
     # --- SAFEGUARD: PHYSICS-INFORMED CLIPPING ---
     # Ambil batas kecepatan komando (G01 F... atau limit G00) dari parser
     cmd_f_limits = df_parsed['Cmd_F'].values
