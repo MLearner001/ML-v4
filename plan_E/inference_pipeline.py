@@ -49,12 +49,12 @@ def predict_nc_file(mpf_filepath: str,
     y_pred_log = preprocessor.target_scaler.inverse_transform(y_pred_scaled)
     raw_predicted_feedrate = np.maximum(1.0, np.expm1(y_pred_log).flatten())
 
-    # === MICRO-PENALTY 10% (0.90) UNTUK GERAK SIMULTAN ===
+    # === MICRO-PENALTY 17% (0.83) UNTUK GERAK SIMULTAN ===
     # Aktif HANYA jika: Mode TRAORI menyala DAN (Sumbu Rotari B/C bergerak ATAU Vektor A3/B3/C3 bergerak)
     is_moving_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
     is_simultaneous = (df_parsed['Is_Traori'].values == 1) & is_moving_rotary
 
-    simultaneous_penalty = np.where(is_simultaneous, 0.90, 1.0)
+    simultaneous_penalty = np.where(is_simultaneous, 0.83, 1.0)
     raw_predicted_feedrate = raw_predicted_feedrate * simultaneous_penalty
     # =====================================================
 
