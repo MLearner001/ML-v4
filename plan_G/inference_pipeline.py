@@ -1,0 +1,139 @@
+"""
+inference_pipeline.py
+Tahap 5: Eksekusi Inferensi Standalone pada File Program NC Baru (.mpf).
+(Updated: V3 tanpa Hard-Clipping dan dengan fix bug inverse transformation)
+"""
+
+import sys
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from batch_gcode_parser import NCParser
+from dataset_preprocessor import DatasetPreprocessor, SlidingWindowGenerator
+from train_bi_lstm import build_bilstm_model
+from typing import Dict
+
+import os
+
+def predict_nc_file(mpf_filepath: str,
+                     model_path: str = "bilstm_feedrate_model.keras",
+                     scaler_path: str = "scaler.pkl",
+                     out_dir: str = ".") -> Dict[str, float]:
+    """Memproses file .mpf baru dan menghitung estimasi waktu pemesinan total."""
+
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    print(f"[INFO] 1. Mem-parsing file NC: {mpf_filepath}")
+    parser = NCParser()
+    df_parsed = parser.parse_file(mpf_filepath)
+
+    # Filter hanya Zona Cutting (Segment == 2) dengan pengaman .any()
+    if 'Segment' in df_parsed.columns and (df_parsed['Segment'] == 2).any():
+        total_before = len(df_parsed)
+        df_parsed = df_parsed[df_parsed['Segment'] == 2].copy().reset_index(drop=True)
+        print(f"[INFO] Filter Segment 2 aktif: Memproses murni Zona Cutting ({len(df_parsed)}/{total_before} baris).")
+
+    print(f"[INFO] 2. Memuat Scaler & Menyiapkan Tensor Jendela W=301...")
+    preprocessor = DatasetPreprocessor(window_size=301)
+    preprocessor.load_scalers(scaler_path)
+
+    # Gunakan SlidingWindowGenerator (mem-mode low) agar WSL/RAM tidak OOM terbunuh paksa pada file gcode besar
+    infer_generator = SlidingWindowGenerator([df_parsed], preprocessor, batch_size=256, is_training=False)
+
+    print(f"[INFO] 3. Memuat Model Bi-LSTM & Menjalankan Inferensi...")
+    # Bangun kerangka arsitektur secara lokal (kompatibel dengan Lambda)
+    input_shape = (preprocessor.window_size, len(preprocessor.feature_cols))
+    model = build_bilstm_model(input_shape=input_shape)
+
+    # Suntikkan bobot hasil training
+    model.load_weights(model_path)
+
+    y_pred_scaled = model.predict(infer_generator, verbose=1)
+
+    # 4. Inverse Transform untuk Mendapatkan Waktu Aktual (Detik)
+    y_pred_log = preprocessor.target_scaler.inverse_transform(y_pred_scaled)
+    raw_predicted_feedrate = np.maximum(1.0, np.expm1(y_pred_log).flatten())
+
+    # === MICRO-PENALTY 17% (0.83) UNTUK GERAK SIMULTAN ===
+    # Aktif HANYA jika: Mode TRAORI menyala DAN (Sumbu Rotari B/C bergerak ATAU Vektor A3/B3/C3 bergerak)
+    is_moving_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
+    is_simultaneous = (df_parsed['Is_Traori'].values == 1) & is_moving_rotary
+
+    simultaneous_penalty = np.where(is_simultaneous, 0.83, 1.0)
+    raw_predicted_feedrate = raw_predicted_feedrate * simultaneous_penalty
+    # =====================================================
+
+    # --- SAFEGUARD: PHYSICS-INFORMED CLIPPING ---
+    # Ambil batas kecepatan komando (G01 F... atau limit G00) dari parser
+    cmd_f_limits = df_parsed['Cmd_F'].values
+
+    # 1. Batas Atas & Bawah diatur via np.clip
+
+    # 2. Batas Bawah: Hybrid Clamping (10% untuk gerak linear normal, 1% untuk gerak 5-Axis/rotasi ATAU Micro-Block)
+    # Ini mencegah anomali waktu meledak pada garis lurus panjang, namun membiarkan pengereman tajam pada 5-Axis atau blok super pendek
+    is_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
+    is_micro = df_parsed['Delta_3D'].values < 0.5
+
+    min_multiplier = np.where(is_rotary | is_micro, 0.01, 0.10)
+
+    min_feedrate_limits = np.maximum(min_multiplier * cmd_f_limits, 1.0)
+
+    # Gunakan np.clip untuk menjepit tebakan agar berada di antara batas bawah dan batas atas Cmd_F
+    predicted_feedrate = np.clip(raw_predicted_feedrate, min_feedrate_limits, cmd_f_limits)
+    # --------------------------------------------
+
+    # 5. Integrasi Kinematika Fisik & Pengecekan Validitas
+    # Gunakan Delta_3D untuk pergerakan linier atau Delta_Rot untuk pergerakan putar
+    effective_distance = np.where(df_parsed['Delta_3D'] > 1e-4,
+                                  df_parsed['Delta_3D'],
+                                  df_parsed['Delta_Rot'])
+    # Dapatkan jarak efektif (hindari div-by-zero)
+    effective_distance = np.maximum(effective_distance, 1e-6)
+
+    is_motion = df_parsed['Is_Motion_Block'].values
+
+    # Waktu eksekusi:
+    # - Jika Motion Block (1): Gunakan Jarak / Prediksi Kecepatan Aktual dari AI
+    # Dalam plan_E (arsitektur Plan C), model memprediksi feedrate, jadi kita hitung durasi:
+    df_parsed['Predicted_Feedrate_mm_min'] = predicted_feedrate
+
+    # Karena parameter teoritis parser sudah dihapus, kita fallback ke ekstraksi G04 Dwell Time murni
+    # Jika tidak ada G04_Dwell_Time, maka blok non-motion diset 0.0
+    dwell_times = df_parsed.get('G04_Dwell_Time', pd.Series([0.0]*len(df_parsed))).values
+
+    block_durations_sec = np.where(
+        is_motion == 1,
+        (effective_distance / predicted_feedrate) * 60.0,
+        dwell_times  # Gunakan G04_Dwell_Time dari parser mentah
+    )
+    df_parsed['Estimated_Duration_Sec'] = block_durations_sec
+
+    total_time_sec = float(df_parsed['Estimated_Duration_Sec'].sum())
+    total_time_min = total_time_sec / 60.0
+
+    # Simpan hasil analisis profil feedrate ke CSV
+    base_name = os.path.basename(mpf_filepath)
+    output_filename = base_name.replace(".mpf", "_predicted_profile.csv").replace(".nc", "_predicted_profile.csv")
+    output_csv = os.path.join(out_dir, output_filename)
+    df_parsed.to_csv(output_csv, index=False)
+
+    print("\n" + "="*50)
+    print("HASIL PREDIKSI MACHINING TIME (DIGITAL TWIN PHASE 2 - V3)")
+    print("="*50)
+    print(f"Total Blok Program     : {len(df_parsed)} baris")
+    print(f"Total Estimasi Waktu   : {total_time_sec:.2f} detik ({total_time_min:.2f} menit)")
+    print(f"Profil Lengkap Disimpan: {output_csv}")
+    print("="*50 + "\n")
+
+    return {
+        "total_seconds": total_time_sec,
+        "total_minutes": total_time_min,
+        "block_count": len(df_parsed)
+    }
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        predict_nc_file(sys.argv[1])
+    else:
+        print("[USAGE] python inference_pipeline.py <path_file_nc.mpf>")
