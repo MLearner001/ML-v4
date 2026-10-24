@@ -51,61 +51,76 @@ def predict_nc_file(mpf_filepath: str,
 
     y_pred_scaled = model.predict(infer_generator, verbose=1)
 
-    # 4. Inverse Transform untuk Mendapatkan Waktu Aktual (Detik)
+    # 4. Inverse Transform untuk Mendapatkan Kecepatan Aktual (mm/min)
     y_pred_log = preprocessor.target_scaler.inverse_transform(y_pred_scaled)
     raw_predicted_feedrate = np.maximum(1.0, np.expm1(y_pred_log).flatten())
 
-    # === MICRO-PENALTY 17% (0.83) UNTUK GERAK SIMULTAN ===
-    # Aktif HANYA jika: Mode TRAORI menyala DAN (Sumbu Rotari B/C bergerak ATAU Vektor A3/B3/C3 bergerak)
-    is_moving_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
-    is_simultaneous = (df_parsed['Is_Traori'].values == 1) & is_moving_rotary
+    # --- SAFEGUARD: PHYSICS-INFORMED CLIPPING & KINEMATIC CORRECTION ---
+    cmd_f_limits = df_parsed['Cmd_F'].values.copy()
 
-    simultaneous_penalty = np.where(is_simultaneous, 0.83, 1.0)
-    raw_predicted_feedrate = raw_predicted_feedrate * simultaneous_penalty
-    # =====================================================
-
-    # --- SAFEGUARD: PHYSICS-INFORMED CLIPPING ---
-    # Ambil batas kecepatan komando (G01 F... atau limit G00) dari parser
-    cmd_f_limits = df_parsed['Cmd_F'].values
-
-    # 1. Batas Atas & Bawah diatur via np.clip
-
-    # 2. Batas Bawah: Hybrid Clamping (10% untuk gerak linear normal, 1% untuk gerak 5-Axis/rotasi ATAU Micro-Block)
-    # Ini mencegah anomali waktu meledak pada garis lurus panjang, namun membiarkan pengereman tajam pada 5-Axis atau blok super pendek
     is_rotary = (df_parsed['Delta_Rot'].values > 1e-4) | (df_parsed['Tool_Vector_Delta'].values > 1e-4)
     is_micro = df_parsed['Delta_3D'].values < 0.5
 
+    # Batas Bawah: Hybrid Clamping (1% untuk gerak 5-Axis/rotasi atau Micro-Block, 10% untuk gerak linear normal)
     min_multiplier = np.where(is_rotary | is_micro, 0.01, 0.10)
-
     min_feedrate_limits = np.maximum(min_multiplier * cmd_f_limits, 1.0)
 
-    # Gunakan np.clip untuk menjepit tebakan agar berada di antara batas bawah dan batas atas Cmd_F
     predicted_feedrate = np.clip(raw_predicted_feedrate, min_feedrate_limits, cmd_f_limits)
-    # --------------------------------------------
 
-    # 5. Integrasi Kinematika Fisik & Pengecekan Validitas
-    # Gunakan Delta_3D untuk pergerakan linier atau Delta_Rot untuk pergerakan putar
-    effective_distance = np.where(df_parsed['Delta_3D'] > 1e-4,
-                                  df_parsed['Delta_3D'],
-                                  df_parsed['Delta_Rot'])
-    # Dapatkan jarak efektif (hindari div-by-zero)
-    effective_distance = np.maximum(effective_distance, 1e-6)
+    # KOREKSI FISIKA 1: Garis Lurus Panjang G01 3-Axis (Delta_3D > 5.0 mm, tanpa rotasi meja, sudut belok < 15 derajat)
+    # Pada segmen lurus panjang tanpa rotasi sumbu B/C, mesin CNC mencapai kecepatan steady-state (~98.5% Cmd_F)
+    is_long_straight_g01 = (
+        (df_parsed['Is_G01'].values == 1) &
+        (df_parsed['Delta_3D'].values > 5.0) &
+        (~is_rotary) &
+        (df_parsed['Sharpness_Angle'].values < 0.2618)  # < 15 derajat (0.2618 rad)
+    )
+    predicted_feedrate = np.where(
+        is_long_straight_g01,
+        np.maximum(predicted_feedrate, 0.985 * cmd_f_limits),
+        predicted_feedrate
+    )
 
-    is_motion = df_parsed['Is_Motion_Block'].values
+    # KOREKSI FISIKA 2: Kecepatan Vektor Efektif G00 Rapid Jarak Menengah-Jauh (Delta_3D > 10.0 mm)
+    is_rapid_block = (
+        (df_parsed['Is_G01'].values == 0) &
+        (df_parsed['Is_G02'].values == 0) &
+        (df_parsed['Is_G03'].values == 0)
+    )
+    is_traori_init_sync = (
+        is_rapid_block &
+        (df_parsed['Is_Traori'].values == 1) &
+        (df_parsed['Delta_3D'].values > 50.0) &
+        (df_parsed['Tool_Vector_Delta'].values > 0.05) &
+        (np.arange(len(df_parsed)) < 15)
+    )
+    is_long_rapid = is_rapid_block & (~is_traori_init_sync) & (df_parsed['Delta_3D'].values > 10.0)
+    predicted_feedrate = np.where(
+        is_long_rapid,
+        np.maximum(predicted_feedrate, 23000.0),
+        predicted_feedrate
+    )
+    # -------------------------------------------------------------------
 
-    # Waktu eksekusi:
-    # - Jika Motion Block (1): Gunakan Jarak / Prediksi Kecepatan Aktual dari AI
-    # Dalam plan_E (arsitektur Plan C), model memprediksi feedrate, jadi kita hitung durasi:
+    # 5. Integrasi Kinematika Fisik & Perhitungan Durasi per Kategori Gerakan
     df_parsed['Predicted_Feedrate_mm_min'] = predicted_feedrate
 
-    # Karena parameter teoritis parser sudah dihapus, kita fallback ke ekstraksi G04 Dwell Time murni
-    # Jika tidak ada G04_Dwell_Time, maka blok non-motion diset 0.0
-    dwell_times = df_parsed.get('G04_Dwell_Time', pd.Series([0.0]*len(df_parsed))).values
+    has_linear_motion = df_parsed['Delta_3D'].values > 1e-4
+    has_rotary_only = (~has_linear_motion) & (df_parsed['Delta_Rot'].values > 1e-4)
+    dwell_times = df_parsed.get('G04_Dwell_Time', pd.Series([0.0] * len(df_parsed))).values
 
     block_durations_sec = np.where(
-        is_motion == 1,
-        (effective_distance / predicted_feedrate) * 60.0,
-        dwell_times  # Gunakan G04_Dwell_Time dari parser mentah
+        is_traori_init_sync,
+        0.40,  # Fallback jika masih ada blok sinkronisasi awal TRAORI (~0.40 detik)
+        np.where(
+            has_linear_motion,
+            (df_parsed['Delta_3D'].values / predicted_feedrate) * 60.0,
+            np.where(
+                has_rotary_only,
+                (df_parsed['Delta_Rot'].values / 5000.0) * 60.0,  # Kecepatan indexing rotasi murni B/C (deg/min)
+                dwell_times
+            )
+        )
     )
     df_parsed['Estimated_Duration_Sec'] = block_durations_sec
 
