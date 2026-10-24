@@ -40,9 +40,14 @@ class MachineState:
   # Modal Cycles
   c832_tol: float = 0.1
   c832_mode: int = 0
+  c800_x: float = 0.0
+  c800_y: float = 0.0
+  c800_z: float = 0.0
   c800_rotx: float = 0.0
   c800_roty: float = 0.0
   c800_rotz: float = 0.0
+  is_c800_active: bool = False
+  traori_vec_initialized: bool = True
 
   # R-Parameters Storage
   r_params: Dict[int, float] = field(default_factory=dict)
@@ -112,17 +117,48 @@ class NCParser:
             self.state.c832_mode = 0
 
   def _parse_cycle800(self, line: str):
-    """Mengekstrak parameter rotasi orientasi bidang CYCLE800."""
-    match = re.search(r"CYCLE800\s*\(([^)]+)\)", line, re.IGNORECASE)
+    """Mengekstrak parameter translasi & rotasi bidang CYCLE800 serta mereset koordinat saat CYCLE800() dibatalkan."""
+    match = re.search(r"CYCLE800\s*\(([^)]*)\)", line, re.IGNORECASE)
     if match:
-      args = [a.strip() for a in match.group(1).split(",")]
-      # Siemens: Parameter rotasi sudut bidang berada di argumen ke-4, 5, 6 atau variasi template
-      # Default fallbacks jika argumen berurutan:
+      content = match.group(1).strip()
+      if not content:
+        # CYCLE800() tanpa argumen = membatalkan bidang miring, kembalikan state posisi ke G54
+        if self.state.is_c800_active:
+          self.state.x += self.state.c800_x
+          self.state.y += self.state.c800_y
+          self.state.z += self.state.c800_z
+        self.state.c800_x = self.state.c800_y = self.state.c800_z = 0.0
+        self.state.c800_rotx = self.state.c800_roty = self.state.c800_rotz = 0.0
+        self.state.is_c800_active = False
+        self.state.is_cycle800 = 0
+        return
+
+      args = [a.strip() for a in content.split(",")]
       try:
         if len(args) >= 7:
-          self.state.c800_rotx = float(args[4]) if args[4] else 0.0
-          self.state.c800_roty = float(args[5]) if args[5] else 0.0
-          self.state.c800_rotz = float(args[6]) if args[6] else 0.0
+          x0 = float(args[4]) if args[4] else 0.0
+          y0 = float(args[5]) if args[5] else 0.0
+          z0 = float(args[6]) if args[6] else 0.0
+          rotx = float(args[7]) if len(args) > 7 and args[7] else 0.0
+          roty = float(args[8]) if len(args) > 8 and args[8] else 0.0
+          rotz = float(args[9]) if len(args) > 9 and args[9] else 0.0
+
+          if abs(x0) < 1e-6 and abs(y0) < 1e-6 and abs(z0) < 1e-6 and abs(rotx) < 1e-6 and abs(roty) < 1e-6 and abs(rotz) < 1e-6:
+            if self.state.is_c800_active:
+              self.state.x += self.state.c800_x
+              self.state.y += self.state.c800_y
+              self.state.z += self.state.c800_z
+            self.state.c800_x = self.state.c800_y = self.state.c800_z = 0.0
+            self.state.c800_rotx = self.state.c800_roty = self.state.c800_rotz = 0.0
+            self.state.is_c800_active = False
+            self.state.is_cycle800 = 0
+          else:
+            self.state.c800_x, self.state.c800_y, self.state.c800_z = x0, y0, z0
+            self.state.c800_rotx = rotx if (rotx or roty or rotz) else x0
+            self.state.c800_roty = roty if (rotx or roty or rotz) else y0
+            self.state.c800_rotz = rotz if (rotx or roty or rotz) else z0
+            self.state.is_c800_active = True
+            self.state.is_cycle800 = 1
       except ValueError:
         pass
 
@@ -239,8 +275,10 @@ class NCParser:
       # 3. Cek Perubahan Mode Modal
       if re.search(r"\bTRAORI\b", line, re.IGNORECASE):
         self.state.is_traori = 1
+        self.state.traori_vec_initialized = False
       if re.search(r"\bTRAFOOF\b", line, re.IGNORECASE):
         self.state.is_traori = 0
+        self.state.traori_vec_initialized = True
 
       if re.search(r"\bG0*0\b", line, re.IGNORECASE):
         self.state.motion_mode = "G00"
@@ -309,6 +347,12 @@ class NCParser:
       tgt_a3 = float(a3_match.group(1)) if a3_match else self.state.a3
       tgt_b3 = float(b3_match.group(1)) if b3_match else self.state.b3
       tgt_c3 = float(c3_match.group(1)) if c3_match else self.state.c3
+
+      # Sinkronisasi vektor orientasi awal pasca-TRAORI agar tidak memicu Delta_Rot & Arc_Sweep palsu pada blok G00 pertama (N57)
+      if (a3_match or b3_match or c3_match) and not self.state.traori_vec_initialized:
+        if not (b_match or c_match):
+          self.state.a3, self.state.b3, self.state.c3 = tgt_a3, tgt_b3, tgt_c3
+        self.state.traori_vec_initialized = True
 
       # -------------------------------------------------------------
       # KASUS A: EKSPANSI GEOMETRIS MCALL (DRILLING)
@@ -678,8 +722,9 @@ class NCParser:
         inst_curvature = np.sqrt(d2x**2 + d2y**2 + d2z**2)
         rolling_curvature = inst_curvature.rolling(window=11, center=True, min_periods=1).mean().fillna(0.0)
 
-        # Masking: hanya simpan nilai kelengkungan jika Is_G01 == 1, sisanya set 0.0
-        df['Spline_Curvature'] = np.where(df['Is_G01'] == 1, rolling_curvature, 0.0)
+        # Masking: hanya simpan nilai kelengkungan jika Is_G01 == 1 DAN bukan garis lurus panjang (Sharpness_Angle >= 5 derajat atau Delta_3D <= 5.0 mm)
+        is_straight_long = (df['Delta_3D'] > 5.0) & (df['Sharpness_Angle'] < 0.0873)
+        df['Spline_Curvature'] = np.where((df['Is_G01'] == 1) & (~is_straight_long), rolling_curvature, 0.0)
     else:
         df['Spline_Curvature'] = 0.0
 
