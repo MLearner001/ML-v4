@@ -698,35 +698,42 @@ class NCParser:
 
 
     df = pd.DataFrame(parsed_rows)
+    df = self.refresh_post_features(df)
+    return df
+
+  @staticmethod
+  def refresh_post_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Menghitung ulang fitur turunan (Delta_X/Y/Z, Spline_Curvature ternormalisasi, dan Active Is_Traori)."""
+    df = df.copy()
+    import numpy as np
 
     # 1. Hapus Fitur Bising: Cmd_S
     if 'Cmd_S' in df.columns:
-        df = df.drop(columns=['Cmd_S'])
+      df = df.drop(columns=['Cmd_S'])
 
     # 2. Ubah Posisi Absolut Menjadi Jarak Relatif
     for axis in ['X', 'Y', 'Z']:
-        tgt_col = f'Tgt_{axis}'
-        delta_col = f'Delta_{axis}'
-        if tgt_col in df.columns:
-            df[delta_col] = df[tgt_col].diff().fillna(0.0)
-            # df = df.drop(columns=[tgt_col]) # Tgt_X, Tgt_Y, Tgt_Z dipertahankan untuk trace_synchronizer
+      tgt_col = f'Tgt_{axis}'
+      delta_col = f'Delta_{axis}'
+      if tgt_col in df.columns:
+        df[delta_col] = df[tgt_col].diff().fillna(0.0)
 
-    # 4. Tambahkan 'Spline_Curvature' Terkondisi (Khusus G01)
-    # Menggunakan turunan kedua dari Delta_X/Y/Z dengan rolling window 11 baris,
-    # tetapi hanya diterapkan pada baris yang Is_G01 == 1.
-    if all(col in df.columns for col in ['Delta_X', 'Delta_Y', 'Delta_Z']) and 'Is_G01' in df.columns:
-        import numpy as np
-        d2x = df['Delta_X'].diff().fillna(0.0)
-        d2y = df['Delta_Y'].diff().fillna(0.0)
-        d2z = df['Delta_Z'].diff().fillna(0.0)
-        inst_curvature = np.sqrt(d2x**2 + d2y**2 + d2z**2)
-        rolling_curvature = inst_curvature.rolling(window=11, center=True, min_periods=1).mean().fillna(0.0)
+    # 3. Filter Is_Traori agar hanya bernilai 1 jika ada aktivitas rotasi di jendela 11 blok (Membedakan 5-Axis Simultan vs 3+2 Axis)
+    if all(col in df.columns for col in ['Is_Traori', 'Delta_Rot', 'Tool_Vector_Delta']):
+      has_rot_step = ((df['Delta_Rot'] > 1e-4) | (df['Tool_Vector_Delta'] > 1e-4)).astype(float)
+      active_rot_window = has_rot_step.rolling(window=11, center=True, min_periods=1).max().fillna(0.0) > 0
+      df['Is_Traori'] = np.where(df['Is_Traori'] == 1, active_rot_window.astype(int), 0)
 
-        # Masking: hanya simpan nilai kelengkungan jika Is_G01 == 1 DAN bukan garis lurus panjang (Sharpness_Angle >= 5 derajat atau Delta_3D <= 5.0 mm)
-        is_straight_long = (df['Delta_3D'] > 5.0) & (df['Sharpness_Angle'] < 0.0873)
-        df['Spline_Curvature'] = np.where((df['Is_G01'] == 1) & (~is_straight_long), rolling_curvature, 0.0)
+    # 4. Hitung 'Spline_Curvature' Ternormalisasi (Sudut Belok Radian per Milimeter pada G01)
+    if all(col in df.columns for col in ['Delta_3D', 'Sharpness_Angle', 'Is_G01']):
+      g01_sharpness = np.where(df['Is_G01'] == 1, df['Sharpness_Angle'], 0.0)
+      inst_curvature = g01_sharpness / (df['Delta_3D'] + 0.05)
+      rolling_curvature = pd.Series(inst_curvature, index=df.index).rolling(window=11, center=True, min_periods=1).mean().fillna(0.0)
+
+      is_straight_long = (df['Delta_3D'] > 5.0) & (df['Sharpness_Angle'] < 0.0873)
+      df['Spline_Curvature'] = np.where((df['Is_G01'] == 1) & (~is_straight_long), rolling_curvature, 0.0)
     else:
-        df['Spline_Curvature'] = 0.0
+      df['Spline_Curvature'] = 0.0
 
     return df
 
