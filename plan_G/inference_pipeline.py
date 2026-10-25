@@ -67,21 +67,50 @@ def predict_nc_file(mpf_filepath: str,
 
     predicted_feedrate = np.clip(raw_predicted_feedrate, min_feedrate_limits, cmd_f_limits)
 
-    # KOREKSI FISIKA 1: Garis Lurus Panjang G01 3-Axis (Delta_3D > 5.0 mm, tanpa rotasi meja, sudut belok < 15 derajat)
-    # Pada segmen lurus panjang tanpa rotasi sumbu B/C, mesin CNC mencapai kecepatan steady-state (~98.5% Cmd_F)
-    is_long_straight_g01 = (
-        (df_parsed['Is_G01'].values == 1) &
+    # --- KOREKSI FISIKA 1: Garis Lurus Panjang & Rantai Lurus/Mulus Terdiskritisasi CAM (3-Axis G01) ---
+    rolling_d3d_11 = df_parsed['Delta_3D'].rolling(window=11, center=True, min_periods=1).sum().values
+    rolling_max_angle_7 = df_parsed['Sharpness_Angle'].rolling(window=7, center=True, min_periods=1).max().values
+    rolling_mean_angle_7 = df_parsed['Sharpness_Angle'].rolling(window=7, center=True, min_periods=1).mean().values
+
+    # Batas kecepatan fisika Newtonian sepanjang jendela 11 blok (mm/min) untuk memastikan jarak akselerasi cukup
+    window_kinematic_limit = np.sqrt(1000.0 * np.maximum(0.0, rolling_d3d_11)) * 60.0
+    has_enough_accel_dist = (rolling_d3d_11 > 5.0) & (window_kinematic_limit > 2.2 * cmd_f_limits)
+
+    # 1a. Segmen lurus tunggal (> 5.0 mm, sudut belok < 15 derajat)
+    is_single_long_straight = (
         (df_parsed['Delta_3D'].values > 5.0) &
-        (~is_rotary) &
-        (df_parsed['Sharpness_Angle'].values < 0.2618)  # < 15 derajat (0.2618 rad)
+        (df_parsed['Sharpness_Angle'].values < 0.2618)
     )
-    predicted_feedrate = np.where(
-        is_long_straight_g01,
-        np.maximum(predicted_feedrate, 0.985 * cmd_f_limits),
-        predicted_feedrate
+    # 1b. Rantai garis lurus yang dicacah CAM menjadi segmen 0.25 - 5.0 mm
+    is_discretized_straight_chain = (
+        (df_parsed['Delta_3D'].values > 0.25) &
+        has_enough_accel_dist &
+        (df_parsed['Sharpness_Angle'].values < 0.0524) &  # < 3 derajat pada blok saat ini
+        (rolling_max_angle_7 < 0.0873)                    # < 5 derajat di 7 blok sekitar
+    )
+    # 1c. Rantai kontur 3-axis mulus pada toleransi CYCLE832 >= 0.01
+    is_smooth_contour_chain = (
+        (df_parsed['Delta_3D'].values > 0.20) &
+        (rolling_d3d_11 > 3.0) &
+        (window_kinematic_limit > 1.8 * cmd_f_limits) &
+        (df_parsed['C832_Tol'].values >= 0.01) &
+        (rolling_mean_angle_7 < 0.0698) &                 # Rata-rata sudut < 4 derajat
+        (rolling_max_angle_7 < 0.1396)                    # Maksimum sudut < 8 derajat
     )
 
-    # KOREKSI FISIKA 2: Kecepatan Vektor Efektif G00 Rapid Jarak Menengah-Jauh (Delta_3D > 10.0 mm)
+    is_g01_non_rotary = (df_parsed['Is_G01'].values == 1) & (~is_rotary)
+
+    predicted_feedrate = np.where(
+        is_g01_non_rotary & (is_single_long_straight | is_discretized_straight_chain),
+        np.maximum(predicted_feedrate, 0.985 * cmd_f_limits),
+        np.where(
+            is_g01_non_rotary & is_smooth_contour_chain,
+            np.maximum(predicted_feedrate, 0.920 * cmd_f_limits),
+            predicted_feedrate
+        )
+    )
+
+    # --- KOREKSI FISIKA 2: Kecepatan Vektor Efektif G00 Rapid Jarak Menengah-Jauh (Delta_3D > 10.0 mm) ---
     is_rapid_block = (
         (df_parsed['Is_G01'].values == 0) &
         (df_parsed['Is_G02'].values == 0) &
@@ -94,7 +123,7 @@ def predict_nc_file(mpf_filepath: str,
         (df_parsed['Tool_Vector_Delta'].values > 0.05) &
         (np.arange(len(df_parsed)) < 15)
     )
-    is_long_rapid = is_rapid_block & (~is_traori_init_sync) & (df_parsed['Delta_3D'].values > 10.0)
+    is_long_rapid = is_rapid_block & (~is_traori_init_sync) & (~is_rotary) & (df_parsed['Delta_3D'].values > 10.0)
     predicted_feedrate = np.where(
         is_long_rapid,
         np.maximum(predicted_feedrate, 23000.0),
@@ -106,20 +135,33 @@ def predict_nc_file(mpf_filepath: str,
     df_parsed['Predicted_Feedrate_mm_min'] = predicted_feedrate
 
     has_linear_motion = df_parsed['Delta_3D'].values > 1e-4
-    has_rotary_only = (~has_linear_motion) & (df_parsed['Delta_Rot'].values > 1e-4)
     dwell_times = df_parsed.get('G04_Dwell_Time', pd.Series([0.0] * len(df_parsed))).values
+
+    linear_duration_sec = np.where(
+        has_linear_motion,
+        (df_parsed['Delta_3D'].values / predicted_feedrate) * 60.0,
+        0.0
+    )
+
+    # KOREKSI FISIKA 3: Batas Durasi Minimum Sumbu Putar B/C (Rotary Kinematic Time Floor)
+    max_delta_bc = np.maximum(
+        df_parsed['Delta_B'].values,
+        np.maximum(df_parsed['Delta_C'].values, df_parsed['Delta_Rot'].values)
+    )
+    eff_rotary_speed_deg_min = np.where(is_rapid_block, 5000.0, 1400.0)
+    rotary_floor_sec = np.where(
+        is_rotary,
+        (max_delta_bc / eff_rotary_speed_deg_min) * 60.0,
+        0.0
+    )
 
     block_durations_sec = np.where(
         is_traori_init_sync,
         0.40,  # Fallback jika masih ada blok sinkronisasi awal TRAORI (~0.40 detik)
         np.where(
-            has_linear_motion,
-            (df_parsed['Delta_3D'].values / predicted_feedrate) * 60.0,
-            np.where(
-                has_rotary_only,
-                (df_parsed['Delta_Rot'].values / 5000.0) * 60.0,  # Kecepatan indexing rotasi murni B/C (deg/min)
-                dwell_times
-            )
+            has_linear_motion | is_rotary,
+            np.maximum(linear_duration_sec, rotary_floor_sec),
+            dwell_times
         )
     )
     df_parsed['Estimated_Duration_Sec'] = block_durations_sec
