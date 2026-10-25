@@ -317,8 +317,8 @@ class NCParser:
           z_match = re.search(r"\bZ\s*=\s*([^\s,]+)|\bZ([-\d\.]+)", line)
       else:
           x_match = y_match = z_match = None
-      b_match = re.search(r"\bB\s*=\s*([^\s,]+)|\bB([-\d\.]+)", line)
-      c_match = re.search(r"\bC\s*=\s*([^\s,]+)|\bC([-\d\.]+)", line)
+      b_match = re.search(r"\bB\s*=\s*(?:DC\()?([^\s,\)]+)\)?|\bB([-\d\.]+)(?![\d\.]*\s*=)", line)
+      c_match = re.search(r"\bC\s*=\s*(?:DC\()?([^\s,\)]+)\)?|\bC([-\d\.]+)(?![\d\.]*\s*=)", line)
       a3_match = re.search(r"\bA3\s*=\s*([-\d\.]+)", line)
       b3_match = re.search(r"\bB3\s*=\s*([-\d\.]+)", line)
       c3_match = re.search(r"\bC3\s*=\s*([-\d\.]+)", line)
