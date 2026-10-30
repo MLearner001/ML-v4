@@ -31,11 +31,14 @@ class DatasetPreprocessor:
     def _apply_log_transforms(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         df_out = df.copy()
 
-        # Kompresi logaritmik tambahan untuk seluruh sumbu putar, vektor, dan belokan
-        rot_features = ['Delta_Rot', 'Tool_Vector_Delta', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3', 'Arc_Sweep', 'Turn_Count']
+        # Kompresi logaritmik tambahan untuk seluruh sumbu putar dan vektor
+        rot_features = ['Delta_Rot', 'Tool_Vector_Delta', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3', 'Arc_Sweep']
         for col in rot_features:
             if col in df_out.columns:
                 df_out[col] = np.log1p(np.maximum(0.0, df_out[col].values))
+
+        if 'Turn_Count' in df_out.columns:
+            df_out['Turn_Count'] = np.log1p(np.maximum(0.0, df_out['Turn_Count'].values)) / np.log1p(100.0)
 
         # Kompresi logaritmik untuk meredam rentang ekstrem
         df_out['Delta_3D'] = np.log1p(np.maximum(0.0, df_out['Delta_3D'].values))
@@ -81,7 +84,7 @@ class DatasetPreprocessor:
 
         binary_cols = ['Is_G01', 'Is_G02', 'Is_G03', 'Is_Traori', 'Is_Cycle800',
                        'Is_MCALL_Sub', 'Is_Motion_Block', 'Is_Reversal_X',
-                       'Is_Reversal_Y', 'Is_Reversal_Z', 'Is_Partial_Arc', 'Is_Z_Plunge']
+                       'Is_Reversal_Y', 'Is_Reversal_Z', 'Is_Partial_Arc', 'Is_Z_Plunge', 'Turn_Count']
 
         for col in binary_cols:
             if col in self.feature_cols:
@@ -140,10 +143,11 @@ class DatasetPreprocessor:
 
         scaled_target = self.target_scaler.transform(df_prep[['Target_Feedrate']]).astype(np.float32) if 'Target_Feedrate' in df_prep.columns else None
 
-        # Buat bobot sampel: Penalti 3x HANYA JIKA TRAORI aktif DAN ada pergerakan rotari, lainnya 1.0
+        # Buat bobot sampel: Penalti 5x untuk Helical Drilling, 3x HANYA JIKA TRAORI aktif DAN ada pergerakan rotari, lainnya 1.0
         is_moving_rotary = (df_prep['Delta_Rot'].values > 1e-4) | (df_prep['Tool_Vector_Delta'].values > 1e-4)
         is_simultaneous = (df_prep['Is_Traori'].values == 1) & is_moving_rotary
-        sample_weights = np.where(is_simultaneous, 3.0, 1.0).astype(np.float32)
+        is_helical = df_prep['Turn_Count'].values > 0
+        sample_weights = np.where(is_helical, 5.0, np.where(is_simultaneous, 3.0, 1.0)).astype(np.float32)
 
         return padded_features, scaled_target, sample_weights
 
