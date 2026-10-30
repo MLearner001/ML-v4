@@ -99,9 +99,16 @@ def predict_nc_file(mpf_filepath: str,
     )
 
     is_g01_non_rotary = (df_parsed['Is_G01'].values == 1) & (~is_rotary)
+    is_arc_non_rotary = ((df_parsed['Is_G02'].values == 1) | (df_parsed['Is_G03'].values == 1)) & (~is_rotary)
+
+    # 1d. Busur melingkar panjang atau Helical Drilling (G02/G03 dengan TURN > 0 atau panjang busur > 10 mm)
+    is_helical_or_long_arc = (
+        is_arc_non_rotary &
+        ((df_parsed['Turn_Count'].values > 0) | (df_parsed['Delta_3D'].values > 10.0))
+    )
 
     predicted_feedrate = np.where(
-        is_g01_non_rotary & (is_single_long_straight | is_discretized_straight_chain),
+        (is_g01_non_rotary & (is_single_long_straight | is_discretized_straight_chain)) | is_helical_or_long_arc,
         np.maximum(predicted_feedrate, 0.985 * cmd_f_limits),
         np.where(
             is_g01_non_rotary & is_smooth_contour_chain,

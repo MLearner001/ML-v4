@@ -31,8 +31,8 @@ class DatasetPreprocessor:
     def _apply_log_transforms(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         df_out = df.copy()
 
-        # Kompresi logaritmik tambahan untuk seluruh sumbu putar & vektor
-        rot_features = ['Delta_Rot', 'Tool_Vector_Delta', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3', 'Arc_Sweep']
+        # Kompresi logaritmik tambahan untuk seluruh sumbu putar, vektor, dan belokan
+        rot_features = ['Delta_Rot', 'Tool_Vector_Delta', 'Delta_B', 'Delta_C', 'Delta_A3', 'Delta_B3', 'Delta_C3', 'Arc_Sweep', 'Turn_Count']
         for col in rot_features:
             if col in df_out.columns:
                 df_out[col] = np.log1p(np.maximum(0.0, df_out[col].values))
