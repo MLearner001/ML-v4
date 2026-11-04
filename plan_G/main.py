@@ -51,7 +51,8 @@ def process_directory(data_dir: str, out_dir: str) -> list:
             # REFRESH POST-FEATURES: Perbarui Delta_X/Y/Z, Spline_Curvature, Is_Traori dll secara instan
             print("   [REFRESH FITUR TAHAP 1] Menerapkan logika perhitungan ekstraksi fitur baru ke dalam data lama...")
             df_synced = NCParser.refresh_post_features(df_synced)
-            df_synced.to_csv(synced_output, index=False)
+            # Dihapus/Diberi komentar untuk mengoptimalkan kecepatan loading saat Resume Training
+            # df_synced.to_csv(synced_output, index=False)
         else:
             trace_file = os.path.join(data_dir, f"{base_name}.csv")
             if not os.path.exists(trace_file):
